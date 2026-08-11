@@ -24,6 +24,12 @@ comments do not create durable project resources.
 
 A project groups work and carries durable resources. A resource is not just display metadata; it is context later injected into task briefs and `.multica/project/resources.json`.
 
+Project archive state is separate from delivery status. Archived projects are
+hidden from ordinary lists, search, and pickers, but their issues, resources,
+comments, and task history are preserved. A direct `project get` by ID still
+returns an archived project. Archive management is available in Web/Desktop
+and the Project API; the CLI has no archive/restore command in this increment.
+
 A project's `description` is also durable context: when an issue (or a quick-create task) is bound to a project, the project description is injected into the agent's brief under `## Project Context` and written to `.multica/project/resources.json` as `project_description`. Use it for project-wide rules/context that should apply to every task in the project.
 
 Common resource types:
@@ -97,6 +103,6 @@ is task-local checkout state.
 
 ## Side effects
 
-Project create/update/delete/status and project resource add/update/remove mutate durable workspace state and affect future tasks. Ask before changing `local_directory` unless the user explicitly requested that exact local path.
+Project create/update/delete/status/archive/restore and project resource add/update/remove mutate durable workspace state and affect future tasks. Ask before changing `local_directory` unless the user explicitly requested that exact local path.
 
 More source-backed details: `references/projects-and-resources-source-map.md`.
