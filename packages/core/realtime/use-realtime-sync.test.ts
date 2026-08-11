@@ -9,6 +9,7 @@ import type { ApiClient } from "../api/client";
 import { chatKeys } from "../chat/queries";
 import { inboxKeys } from "../inbox/queries";
 import { issueKeys } from "../issues/queries";
+import { projectKeys } from "../projects/queries";
 import { notificationPreferenceKeys } from "../notification-preferences/queries";
 import { workspaceKeys } from "../workspace/queries";
 import type {
@@ -19,6 +20,8 @@ import type {
   ChatMessagesPage,
   ChatSession,
   InboxItem,
+  ListProjectsResponse,
+  Project,
   Workspace,
 } from "../types";
 import {
@@ -28,11 +31,78 @@ import {
   applyChatQuickActionsToCache,
   applyChatSessionUpdatedToCache,
   applyWorkspaceUpdatedToCache,
+  applyProjectUpdatedToCache,
   handleInboxNew,
   invalidateChatMessageQueries,
   refetchPendingChatAggregate,
   resolveInboxSourceSlug,
 } from "./use-realtime-sync";
+
+const WS_ID = "ws-1";
+
+function project(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "project-1",
+    workspace_id: WS_ID,
+    title: "Project One",
+    description: null,
+    icon: null,
+    status: "in_progress",
+    priority: "none",
+    lead_type: null,
+    lead_id: null,
+    start_date: null,
+    due_date: null,
+    created_at: "2026-08-10T00:00:00Z",
+    updated_at: "2026-08-10T00:00:00Z",
+    issue_count: 1,
+    done_count: 1,
+    resource_count: 1,
+    archived_at: null,
+    archived_by: null,
+    ...overrides,
+  };
+}
+
+describe("applyProjectUpdatedToCache", () => {
+  it("removes an archived project from active lists and retains full detail", () => {
+    const qc = createQueryClient();
+    const active: ListProjectsResponse = { projects: [project()], total: 1 };
+    qc.setQueryData(projectKeys.list(WS_ID, "active"), active);
+    qc.setQueryData(projectKeys.list(WS_ID, "only"), { projects: [], total: 0 });
+    qc.setQueryData(projectKeys.list(WS_ID, "all"), active);
+    const archived = project({
+      archived_at: "2026-08-10T01:00:00Z",
+      archived_by: "user-1",
+    });
+
+    applyProjectUpdatedToCache(qc, WS_ID, archived);
+
+    expect(qc.getQueryData<ListProjectsResponse>(projectKeys.list(WS_ID, "active")))
+      .toEqual({ projects: [], total: 0 });
+    expect(qc.getQueryData<ListProjectsResponse>(projectKeys.list(WS_ID, "only"))?.projects)
+      .toEqual([archived]);
+    expect(qc.getQueryData<ListProjectsResponse>(projectKeys.list(WS_ID, "all"))?.projects)
+      .toEqual([archived]);
+    expect(qc.getQueryData(projectKeys.detail(WS_ID, archived.id))).toEqual(archived);
+  });
+
+  it("re-inserts a restored project only into already-cached matching lists", () => {
+    const qc = createQueryClient();
+    const archived = project({ archived_at: "2026-08-10T01:00:00Z" });
+    qc.setQueryData(projectKeys.list(WS_ID, "active"), { projects: [], total: 0 });
+    qc.setQueryData(projectKeys.list(WS_ID, "only"), { projects: [archived], total: 1 });
+    const restored = project({ title: "Restored Project" });
+
+    applyProjectUpdatedToCache(qc, WS_ID, restored);
+
+    expect(qc.getQueryData<ListProjectsResponse>(projectKeys.list(WS_ID, "active"))?.projects)
+      .toEqual([restored]);
+    expect(qc.getQueryData<ListProjectsResponse>(projectKeys.list(WS_ID, "only")))
+      .toEqual({ projects: [], total: 0 });
+    expect(qc.getQueryData(projectKeys.list(WS_ID, "all"))).toBeUndefined();
+  });
+});
 
 const sessionId = "session-1";
 const taskId = "task-1";

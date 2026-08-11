@@ -71,6 +71,19 @@ export function patchProjectDetail(
   qc.setQueryData<Project>(projectKeys.detail(wsId, project.id), project);
 }
 
+export function applyProjectUpdatedToCache(
+  qc: QueryClient,
+  wsId: string,
+  project: Project,
+) {
+  if (project.archived_at) {
+    removeFromProjectsList(qc, wsId, project.id);
+  } else {
+    patchProjectsList(qc, wsId, project);
+  }
+  patchProjectDetail(qc, wsId, project);
+}
+
 export function clearProjectDetail(
   qc: QueryClient,
   wsId: string,

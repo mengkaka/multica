@@ -20,8 +20,7 @@ import { projectKeys } from "@/data/queries/projects";
 import { useWSSubscriptions } from "@/lib/use-ws-subscriptions";
 import {
   clearProjectDetail,
-  patchProjectDetail,
-  patchProjectsList,
+  applyProjectUpdatedToCache,
   removeFromProjectsList,
   upsertIntoProjectsList,
 } from "./project-ws-updaters";
@@ -39,8 +38,7 @@ export function useProjectsRealtime() {
           upsertIntoProjectsList(qc, wsId, payload.project);
         }),
         ws.on("project:updated", (payload) => {
-          patchProjectsList(qc, wsId, payload.project);
-          patchProjectDetail(qc, wsId, payload.project);
+          applyProjectUpdatedToCache(qc, wsId, payload.project);
         }),
         ws.on("project:deleted", (payload) => {
           removeFromProjectsList(qc, wsId, payload.project_id);

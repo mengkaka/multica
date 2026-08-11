@@ -113,7 +113,46 @@ import type {
   InvitationCreatedPayload,
   DesignReadyPayload,
   DesignDraftReadyPayload,
+  ListProjectsResponse,
+  Project,
+  ProjectUpdatedPayload,
 } from "../types";
+
+export function applyProjectUpdatedToCache(
+  qc: QueryClient,
+  wsId: string,
+  project: Project,
+): void {
+  const lists = qc.getQueriesData<ListProjectsResponse>({
+    queryKey: [...projectKeys.all(wsId), "list"],
+  });
+
+  for (const [key, cached] of lists) {
+    if (!cached) continue;
+    const mode = key[3] ?? "active";
+    const matches =
+      mode === "all" ||
+      (mode === "only" ? !!project.archived_at : !project.archived_at);
+    const existing = cached.projects.some((item) => item.id === project.id);
+    const projects = matches
+      ? existing
+        ? cached.projects.map((item) =>
+            item.id === project.id ? project : item,
+          )
+        : [...cached.projects, project]
+      : cached.projects.filter((item) => item.id !== project.id);
+
+    qc.setQueryData<ListProjectsResponse>(key, {
+      ...cached,
+      projects,
+      total:
+        cached.total +
+        (matches && !existing ? 1 : !matches && existing ? -1 : 0),
+    });
+  }
+
+  qc.setQueryData(projectKeys.detail(wsId, project.id), project);
+}
 
 const chatWsLogger = createLogger("chat.ws");
 
@@ -954,6 +993,7 @@ export function useRealtimeSync(
     // Event types handled by specific handlers below -- skip generic refresh
     const specificEvents = new Set([
       "workspace:updated",
+      "project:updated",
       "issue:updated", "issue:created", "issue:deleted", "issue_attachments:changed", "issue_labels:changed", "issue_metadata:changed", "issue_properties:changed", "property:created", "property:updated", "inbox:new",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
@@ -1006,6 +1046,13 @@ export function useRealtimeSync(
           onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
         }
       }
+    });
+
+    const unsubProjectUpdated = ws.on("project:updated", (p) => {
+      const { project } = p as ProjectUpdatedPayload;
+      if (!project?.id) return;
+      const wsId = getCurrentWsId();
+      if (wsId) applyProjectUpdatedToCache(qc, wsId, project);
     });
 
     const unsubIssueCreated = ws.on("issue:created", (p) => {
@@ -1617,6 +1664,7 @@ export function useRealtimeSync(
     return () => {
       unsubAny();
       unsubIssueUpdated();
+      unsubProjectUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
       unsubIssueAttachmentsChanged();

@@ -174,6 +174,8 @@ export const ProjectSchema = z.object({
   issue_count: z.number().default(0),
   done_count: z.number().default(0),
   resource_count: z.number().default(0),
+  archived_at: z.string().nullable().default(null),
+  archived_by: z.string().nullable().default(null),
 }).loose();
 
 export const ListProjectsResponseSchema = z.object({
@@ -209,6 +211,8 @@ export const EMPTY_PROJECT: Project = {
   issue_count: 0,
   done_count: 0,
   resource_count: 0,
+  archived_at: null,
+  archived_by: null,
 };
 
 // Skill.content routinely runs 50-200KB (see the doc comment on
