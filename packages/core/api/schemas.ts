@@ -84,6 +84,8 @@ import type {
   PMOSyncLink,
   ListPMOConfigsResponse,
   ListPMORunsResponse,
+  Project,
+  ListProjectsResponse,
   TestPlan,
   TestRun,
   TestRunCase,
@@ -852,7 +854,7 @@ export const EMPTY_SEARCH_ISSUES_RESPONSE: SearchIssuesResponse = {
   total: 0,
 };
 
-const ProjectSchema = z.object({
+export const ProjectSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
   title: z.string(),
@@ -867,12 +869,45 @@ const ProjectSchema = z.object({
   // object — which would degrade a search/list batch to the empty fallback.
   start_date: z.string().nullable().default(null),
   due_date: z.string().nullable().default(null),
+  archived_at: z.string().nullable().default(null),
+  archived_by: z.string().nullable().default(null),
   created_at: z.string(),
   updated_at: z.string(),
   issue_count: z.number().default(0),
   done_count: z.number().default(0),
   resource_count: z.number().default(0),
 }).loose();
+
+export const EMPTY_PROJECT: Project = {
+  id: "",
+  workspace_id: "",
+  title: "",
+  description: null,
+  icon: null,
+  status: "planned",
+  priority: "none",
+  lead_type: null,
+  lead_id: null,
+  start_date: null,
+  due_date: null,
+  archived_at: null,
+  archived_by: null,
+  created_at: "",
+  updated_at: "",
+  issue_count: 0,
+  done_count: 0,
+  resource_count: 0,
+};
+
+export const ListProjectsResponseSchema = z.object({
+  projects: z.array(ProjectSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_PROJECTS_RESPONSE: ListProjectsResponse = {
+  projects: [],
+  total: 0,
+};
 
 const SearchProjectResultSchema = ProjectSchema.extend({
   match_source: z.string(),
@@ -888,6 +923,11 @@ export const EMPTY_SEARCH_PROJECTS_RESPONSE: SearchProjectsResponse = {
   projects: [],
   total: 0,
 };
+
+export function parseProject(data: unknown): Project {
+  const result = ProjectSchema.safeParse(data);
+  return result.success ? (result.data as Project) : EMPTY_PROJECT;
+}
 
 const IssueAssigneeGroupSchema = z.object({
   id: z.string(),

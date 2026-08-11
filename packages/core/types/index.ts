@@ -144,6 +144,7 @@ export type {
   Project,
   ProjectStatus,
   ProjectPriority,
+  ProjectArchiveMode,
   CreateProjectRequest,
   UpdateProjectRequest,
   ListProjectsResponse,

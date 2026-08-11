@@ -75,6 +75,7 @@ import {
   parsePMORun,
   parsePMOConfig,
   parsePMOSyncLink,
+  parseProject,
   EMPTY_PMO_RUN,
   EMPTY_PMO_SYNC_LINK,
   ListPMOConfigsResponseSchema,
@@ -1271,6 +1272,36 @@ describe("SearchProjectsResponseSchema date drift", () => {
     expect(parsed.projects).toHaveLength(1);
     expect(parsed.projects[0]?.start_date).toBeNull();
     expect(parsed.projects[0]?.due_date).toBeNull();
+  });
+});
+
+describe("ProjectSchema archive drift", () => {
+  const project = {
+    id: "p-1",
+    workspace_id: "ws-1",
+    title: "Launch",
+    description: null,
+    icon: null,
+    status: "in_progress",
+    priority: "high",
+    lead_type: null,
+    lead_id: null,
+    start_date: null,
+    due_date: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+
+  it("defaults archive fields omitted by an older backend to null", () => {
+    expect(parseProject(project)).toMatchObject({ archived_at: null, archived_by: null });
+  });
+
+  it("falls back when archive metadata is malformed", () => {
+    expect(parseProject({ ...project, archived_at: true })).toMatchObject({
+      id: "",
+      archived_at: null,
+      archived_by: null,
+    });
   });
 });
 

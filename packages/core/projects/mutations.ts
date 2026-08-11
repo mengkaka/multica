@@ -80,3 +80,23 @@ export function useDeleteProject() {
     },
   });
 }
+
+function useProjectArchiveMutation(mutationFn: (id: string) => Promise<Project>) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn,
+    onSuccess: async (project, id) => {
+      qc.setQueryData(projectKeys.detail(wsId, id), project);
+      await qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+    },
+  });
+}
+
+export function useArchiveProject() {
+  return useProjectArchiveMutation((id) => api.archiveProject(id));
+}
+
+export function useRestoreProject() {
+  return useProjectArchiveMutation((id) => api.restoreProject(id));
+}

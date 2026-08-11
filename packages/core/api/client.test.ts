@@ -69,6 +69,72 @@ describe("ApiClient pull-request response schema", () => {
   });
 });
 
+describe("ApiClient project archive endpoints", () => {
+  const project = {
+    id: "p-1",
+    workspace_id: "ws-1",
+    title: "Launch",
+    description: null,
+    icon: null,
+    status: "in_progress",
+    priority: "high",
+    lead_type: null,
+    lead_id: null,
+    start_date: null,
+    due_date: null,
+    archived_at: null,
+    archived_by: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    issue_count: 0,
+    done_count: 0,
+    resource_count: 0,
+  };
+
+  it("passes the archive mode when listing projects", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ projects: [project], total: 1 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new ApiClient("https://api.example.test").listProjects({ archived: "only" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.example.test/api/projects?archived=only",
+    );
+  });
+
+  it("posts archive and restore to the exact project endpoints", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...project, archived_at: "2026-08-10T00:00:00Z" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(project), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.archiveProject("p-1");
+    await client.restoreProject("p-1");
+
+    expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ["https://api.example.test/api/projects/p-1/archive", "POST"],
+      ["https://api.example.test/api/projects/p-1/restore", "POST"],
+    ]);
+  });
+});
+
 describe("ApiClient server Table query", () => {
   it("posts the canonical query to the group and branch endpoints", async () => {
     const fetchMock = vi

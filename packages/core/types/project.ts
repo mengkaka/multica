@@ -2,6 +2,8 @@ export type ProjectStatus = "planned" | "in_progress" | "paused" | "completed" |
 
 export type ProjectPriority = "urgent" | "high" | "medium" | "low" | "none";
 
+export type ProjectArchiveMode = "active" | "only" | "all";
+
 export interface Project {
   id: string;
   workspace_id: string;
@@ -16,6 +18,8 @@ export interface Project {
   // issue.start_date / issue.due_date.
   start_date: string | null;
   due_date: string | null;
+  archived_at: string | null;
+  archived_by: string | null;
   created_at: string;
   updated_at: string;
   issue_count: number;

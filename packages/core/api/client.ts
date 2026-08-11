@@ -100,6 +100,7 @@ import type {
   StartMikaOnboardingResponse,
   CancelTaskResponse,
   Project,
+  ProjectArchiveMode,
   CreateProjectRequest,
   UpdateProjectRequest,
   ListProjectsResponse,
@@ -344,6 +345,8 @@ import {
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_SEARCH_ISSUES_RESPONSE,
   EMPTY_SEARCH_PROJECTS_RESPONSE,
+  EMPTY_PROJECT,
+  EMPTY_LIST_PROJECTS_RESPONSE,
   EMPTY_SQUAD,
   EMPTY_SQUAD_LIST,
   EMPTY_SQUAD_MEMBER_STATUS_LIST,
@@ -372,6 +375,8 @@ import {
   RuntimeUsageListSchema,
   SearchIssuesResponseSchema,
   SearchProjectsResponseSchema,
+  ProjectSchema,
+  ListProjectsResponseSchema,
   SquadSchema,
   SquadListSchema,
   SquadMemberStatusListResponseSchema,
@@ -2910,14 +2915,21 @@ export class ApiClient {
   }
 
   // Projects
-  async listProjects(params?: { status?: string }): Promise<ListProjectsResponse> {
+  async listProjects(params: { status?: string; archived?: ProjectArchiveMode } = {}): Promise<ListProjectsResponse> {
     const search = new URLSearchParams();
-    if (params?.status) search.set("status", params.status);
-    return this.fetch(`/api/projects?${search}`);
+    if (params.status) search.set("status", params.status);
+    if (params.archived) search.set("archived", params.archived);
+    const raw = await this.fetch<unknown>(`/api/projects?${search}`);
+    return parseWithFallback(raw, ListProjectsResponseSchema, EMPTY_LIST_PROJECTS_RESPONSE, {
+      endpoint: "GET /api/projects",
+    });
   }
 
   async getProject(id: string): Promise<Project> {
-    return this.fetch(`/api/projects/${id}`);
+    const raw = await this.fetch<unknown>(`/api/projects/${id}`);
+    return parseWithFallback(raw, ProjectSchema, { ...EMPTY_PROJECT, id }, {
+      endpoint: "GET /api/projects/:id",
+    });
   }
 
   // Test cases
@@ -3156,16 +3168,36 @@ export class ApiClient {
   }
 
   async createProject(data: CreateProjectRequest): Promise<Project> {
-    return this.fetch("/api/projects", {
+    const raw = await this.fetch<unknown>("/api/projects", {
       method: "POST",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ProjectSchema, { ...EMPTY_PROJECT, title: data.title }, {
+      endpoint: "POST /api/projects",
     });
   }
 
   async updateProject(id: string, data: UpdateProjectRequest): Promise<Project> {
-    return this.fetch(`/api/projects/${id}`, {
+    const raw = await this.fetch<unknown>(`/api/projects/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, ProjectSchema, { ...EMPTY_PROJECT, id }, {
+      endpoint: "PUT /api/projects/:id",
+    });
+  }
+
+  async archiveProject(id: string): Promise<Project> {
+    const raw = await this.fetch<unknown>(`/api/projects/${id}/archive`, { method: "POST" });
+    return parseWithFallback(raw, ProjectSchema, { ...EMPTY_PROJECT, id }, {
+      endpoint: "POST /api/projects/:id/archive",
+    });
+  }
+
+  async restoreProject(id: string): Promise<Project> {
+    const raw = await this.fetch<unknown>(`/api/projects/${id}/restore`, { method: "POST" });
+    return parseWithFallback(raw, ProjectSchema, { ...EMPTY_PROJECT, id }, {
+      endpoint: "POST /api/projects/:id/restore",
     });
   }
 
