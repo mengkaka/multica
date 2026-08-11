@@ -47,6 +47,25 @@ func TestDiffPMOSnapshotCreatesProjectBeforeIssuesAndRetainsHierarchy(t *testing
 	}
 }
 
+func TestDiffPMOSnapshotFormatsOnlyProjectTitle(t *testing.T) {
+	snapshot := mustParsePMOSnapshot(t, validPMOSnapshotJSON())
+	snapshot.Parent.DisplayNumber = " REQ-1234 "
+	snapshot.Parent.Title = " Add invoice export "
+	snapshot.Children[0].Title = "Child title"
+	snapshot.Children[0].Tasks[0].Title = "Task title"
+
+	diff := DiffPMOSnapshot(PMODiffInput{Snapshot: snapshot})
+	if got := diff.Entities[0].Fields["title"].External; got != "REQ-1234 Add invoice export" {
+		t.Fatalf("project title = %q", got)
+	}
+	if got := diff.Entities[1].Fields["title"].External; got != "Child title" {
+		t.Fatalf("child title = %q", got)
+	}
+	if got := diff.Entities[2].Fields["title"].External; got != "Task title" {
+		t.Fatalf("task title = %q", got)
+	}
+}
+
 func TestDiffPMOSnapshotMarksMissingLinkedEntitiesExternallyRemoved(t *testing.T) {
 	snapshot := mustParsePMOSnapshot(t, validPMOSnapshotJSON())
 	diff := DiffPMOSnapshot(PMODiffInput{

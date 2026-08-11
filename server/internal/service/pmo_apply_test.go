@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ type pmoApplyFixture struct {
 	svc         *PMOService
 	workspaceID pgtype.UUID
 	ownerID     pgtype.UUID
+	agentID     pgtype.UUID
 	configID    pgtype.UUID
 	bus         *events.Bus
 }
@@ -79,6 +81,7 @@ func newPMOApplyFixture(t *testing.T) pmoApplyFixture {
 	bus := events.New()
 	svc := NewPMOService(queries, pool, nil)
 	svc.IssueSvc = NewIssueService(queries, pool, bus, nil, nil)
+	svc.IssueSvc.TaskService = NewTaskService(queries, pool, nil, bus)
 
 	t.Cleanup(func() {
 		cleanup := context.Background()
@@ -90,6 +93,7 @@ func newPMOApplyFixture(t *testing.T) pmoApplyFixture {
 		_, _ = pool.Exec(cleanup, `DELETE FROM project WHERE workspace_id = $1`, workspaceID)
 		_, _ = pool.Exec(cleanup, `DELETE FROM issue_property WHERE workspace_id = $1`, workspaceID)
 		_, _ = pool.Exec(cleanup, `DELETE FROM member WHERE workspace_id = $1`, workspaceID)
+		_, _ = pool.Exec(cleanup, `DELETE FROM squad WHERE workspace_id = $1`, workspaceID)
 		_, _ = pool.Exec(cleanup, `DELETE FROM agent WHERE id = $1`, agentID)
 		_, _ = pool.Exec(cleanup, `DELETE FROM agent_runtime WHERE id = $1`, runtimeID)
 		_, _ = pool.Exec(cleanup, `DELETE FROM workspace WHERE id = $1`, workspaceID)
@@ -101,9 +105,29 @@ func newPMOApplyFixture(t *testing.T) pmoApplyFixture {
 		svc:         svc,
 		workspaceID: parsePGUUID(t, workspaceID),
 		ownerID:     parsePGUUID(t, ownerID),
+		agentID:     parsePGUUID(t, agentID),
 		configID:    config.ID,
 		bus:         bus,
 	}
+}
+
+func configurePMOOrchestrationSquad(t *testing.T, f pmoApplyFixture) db.Squad {
+	t.Helper()
+	ctx := context.Background()
+	squad, err := f.svc.Queries.CreateSquad(ctx, db.CreateSquadParams{
+		WorkspaceID: f.workspaceID,
+		Name:        "PMO Orchestration Squad",
+		Description: "",
+		LeaderID:    f.agentID,
+		CreatorID:   f.ownerID,
+	})
+	if err != nil {
+		t.Fatalf("create squad: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE pmo_sync_config SET orchestration_squad_id = $1 WHERE id = $2`, squad.ID, f.configID); err != nil {
+		t.Fatalf("configure orchestration squad: %v", err)
+	}
+	return squad
 }
 
 func parsePGUUID(t *testing.T, s string) pgtype.UUID {
@@ -273,7 +297,7 @@ func TestApplyPMORunFirstImportCreatesHierarchy(t *testing.T) {
 	if err := f.pool.QueryRow(ctx, `SELECT title, status FROM project WHERE id = $1`, projectLink.LocalID).Scan(&projectTitle, &projectStatus); err != nil {
 		t.Fatalf("read project: %v", err)
 	}
-	if projectTitle != "Imported Project" || projectStatus != "planned" {
+	if projectTitle != "P-001 Imported Project" || projectStatus != "planned" {
 		t.Fatalf("project title/status = %q/%q", projectTitle, projectStatus)
 	}
 
@@ -338,6 +362,153 @@ func TestApplyPMORunFirstImportCreatesHierarchy(t *testing.T) {
 	defer mu.Unlock()
 	if createdEvents != 3 {
 		t.Fatalf("issue:created events = %d, want 3", createdEvents)
+	}
+	config, err := f.svc.Queries.GetPMOSyncConfig(ctx, db.GetPMOSyncConfigParams{ID: f.configID, WorkspaceID: f.workspaceID})
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if config.OrchestrationIssueID.Valid {
+		t.Fatalf("config without squad created orchestration issue %v", config.OrchestrationIssueID)
+	}
+}
+
+func TestApplyPMORunCreatesOneOrchestrationIssueAndLeaderTask(t *testing.T) {
+	f := newPMOApplyFixture(t)
+	squad := configurePMOOrchestrationSquad(t, f)
+	ctx := context.Background()
+	snapshot := buildPMOSnapshotJSON(t,
+		pmoRequirement("EXT-P-001", "REQ-1234", "Add invoice export", "planned", "planned", 1),
+		nil, nil)
+
+	runs := []db.PmoSyncRun{seedPMOPreview(t, f, snapshot), seedPMOPreview(t, f, snapshot)}
+	errs := make(chan error, len(runs))
+	var wg sync.WaitGroup
+	for _, run := range runs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent apply: %v", err)
+		}
+	}
+
+	config, err := f.svc.Queries.GetPMOSyncConfig(ctx, db.GetPMOSyncConfigParams{ID: f.configID, WorkspaceID: f.workspaceID})
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if !config.OrchestrationIssueID.Valid {
+		t.Fatal("orchestration issue id was not persisted")
+	}
+	root := issueByID(t, f.pool, config.OrchestrationIssueID)
+	if root.Title != "REQ-1234 Add invoice export" || root.Status != "todo" {
+		t.Fatalf("root title/status = %q/%q", root.Title, root.Status)
+	}
+	if !root.ProjectID.Valid || root.AssigneeType.String != "squad" || root.AssigneeID != squad.ID {
+		t.Fatalf("root project/assignee = %v/%v/%v", root.ProjectID, root.AssigneeType, root.AssigneeID)
+	}
+	tasks, err := f.svc.Queries.ListTasksByIssue(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root tasks: %v", err)
+	}
+	if len(tasks) != 1 || !tasks[0].IsLeaderTask || tasks[0].SquadID != squad.ID {
+		t.Fatalf("root tasks = %#v", tasks)
+	}
+	var projects, roots int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM project WHERE workspace_id = $1`, f.workspaceID).Scan(&projects); err != nil {
+		t.Fatalf("count projects: %v", err)
+	}
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM issue WHERE workspace_id = $1 AND project_id = $2 AND assignee_type = 'squad'`, f.workspaceID, root.ProjectID).Scan(&roots); err != nil {
+		t.Fatalf("count orchestration roots: %v", err)
+	}
+	if projects != 1 || roots != 1 {
+		t.Fatalf("projects/roots = %d/%d, want 1/1", projects, roots)
+	}
+}
+
+func TestApplyPMORunReopensTerminalOrchestrationIssueOnce(t *testing.T) {
+	f := newPMOApplyFixture(t)
+	configurePMOOrchestrationSquad(t, f)
+	ctx := context.Background()
+	parent := pmoRequirement("EXT-P-001", "REQ-1234", "Initial title", "planned", "planned", 1)
+	run := seedPMOPreview(t, f, buildPMOSnapshotJSON(t, parent, nil, nil))
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	config, err := f.svc.Queries.GetPMOSyncConfig(ctx, db.GetPMOSyncConfigParams{ID: f.configID, WorkspaceID: f.workspaceID})
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE issue SET status = 'done' WHERE id = $1`, config.OrchestrationIssueID); err != nil {
+		t.Fatalf("complete root: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE agent_task_queue SET status = 'completed', completed_at = now() WHERE issue_id = $1`, config.OrchestrationIssueID); err != nil {
+		t.Fatalf("complete leader task: %v", err)
+	}
+
+	parent["title"] = "Reopened title"
+	parent["description"] = "Updated description"
+	run = seedPMOPreview(t, f, buildPMOSnapshotJSON(t, parent, nil, nil))
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("reopen apply: %v", err)
+	}
+	root := issueByID(t, f.pool, config.OrchestrationIssueID)
+	if root.Status != "todo" || root.Title != "REQ-1234 Reopened title" || root.Description.String != "Updated description" {
+		t.Fatalf("reopened root = %q/%q/%q", root.Status, root.Title, root.Description.String)
+	}
+	tasks, err := f.svc.Queries.ListTasksByIssue(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("list root tasks: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("leader tasks after reopen = %d, want 2", len(tasks))
+	}
+}
+
+func TestApplyPMORunRejectsOrchestrationIssueFromAnotherProject(t *testing.T) {
+	f := newPMOApplyFixture(t)
+	configurePMOOrchestrationSquad(t, f)
+	ctx := context.Background()
+	snapshot := buildPMOSnapshotJSON(t,
+		pmoRequirement("EXT-P-001", "REQ-1234", "Linked project", "planned", "planned", 1),
+		nil, nil)
+	run := seedPMOPreview(t, f, snapshot)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	config, err := f.svc.Queries.GetPMOSyncConfig(ctx, db.GetPMOSyncConfigParams{ID: f.configID, WorkspaceID: f.workspaceID})
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	other, err := f.svc.Queries.CreateProject(ctx, db.CreateProjectParams{
+		WorkspaceID: f.workspaceID,
+		Title:       "Other project",
+		Status:      "planned",
+		Priority:    "medium",
+	})
+	if err != nil {
+		t.Fatalf("create other project: %v", err)
+	}
+	if _, err := f.pool.Exec(ctx, `UPDATE issue SET project_id = $1 WHERE id = $2`, other.ID, config.OrchestrationIssueID); err != nil {
+		t.Fatalf("move orchestration issue: %v", err)
+	}
+
+	run = seedPMOPreview(t, f, snapshot)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); !errors.Is(err, ErrPMOOrchestrationIssueLink) {
+		t.Fatalf("apply error = %v, want ErrPMOOrchestrationIssueLink", err)
+	}
+	stored, err := f.svc.Queries.GetPMOSyncRun(ctx, db.GetPMOSyncRunParams{ID: run.ID, WorkspaceID: f.workspaceID})
+	if err != nil {
+		t.Fatalf("get failed run: %v", err)
+	}
+	if stored.Status != "preview_ready" {
+		t.Fatalf("failed run status = %q, want preview_ready", stored.Status)
 	}
 }
 

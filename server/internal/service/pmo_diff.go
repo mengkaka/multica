@@ -1,6 +1,9 @@
 package service
 
-import "reflect"
+import (
+	"reflect"
+	"strings"
+)
 
 type PMOFieldDecision string
 
@@ -250,6 +253,7 @@ func pmoRequirementEntity(requirement PMORequirement, localType PMOLocalType, pr
 	}
 	if localType == PMOLocalProject {
 		ownerField = "lead_id"
+		fields["title"] = pmoProjectTitle(requirement)
 	} else {
 		fields["workload"] = pmoFloatValue(requirement.Workload)
 	}
@@ -263,6 +267,10 @@ func pmoRequirementEntity(requirement PMORequirement, localType PMOLocalType, pr
 		ownerField:         ownerField,
 		fields:             fields,
 	}
+}
+
+func pmoProjectTitle(requirement PMORequirement) string {
+	return strings.TrimSpace(requirement.DisplayNumber) + " " + strings.TrimSpace(requirement.Title)
 }
 
 func pmoTaskEntity(task PMOTask, projectExternalKey, parentExternalKey string) pmoSourceEntity {

@@ -399,6 +399,8 @@ func (h *Handler) ApplyPMORun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "PMO run not found")
 		case err == service.ErrPMORunNotPreviewReady:
 			writeError(w, http.StatusConflict, "PMO run is not ready to apply")
+		case errors.Is(err, service.ErrPMOOrchestrationIssueLink), errors.Is(err, service.ErrPMOOrchestrationSquad):
+			writeError(w, http.StatusConflict, err.Error())
 		case isBadRequestInput(err):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:

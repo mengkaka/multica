@@ -40,9 +40,10 @@ const (
 // Apply-state errors: ApplyRun on a run in the wrong state / workspace maps
 // to 409/404 at the handler layer.
 var (
-	ErrPMORunNotPreviewReady = errors.New("pmo run is not ready to apply")
-	ErrPMORunNotFound        = errors.New("pmo run not found")
-	ErrPMOMemberNotFound     = errors.New("member not found in this workspace")
+	ErrPMORunNotPreviewReady     = errors.New("pmo run is not ready to apply")
+	ErrPMORunNotFound            = errors.New("pmo run not found")
+	ErrPMOMemberNotFound         = errors.New("member not found in this workspace")
+	ErrPMOOrchestrationIssueLink = errors.New("pmo orchestration issue does not belong to the imported project")
 )
 
 func validatePMOResolutions(resolutions []PMOConflictResolution) error {
@@ -79,10 +80,11 @@ type pmoCreatedIssue struct {
 }
 
 type pmoApplyResult struct {
-	reviewItems   bool
-	diffJSON      []byte
-	summary       pmoRunApplySummary
-	createdIssues []pmoCreatedIssue
+	reviewItems      bool
+	diffJSON         []byte
+	summary          pmoRunApplySummary
+	createdIssues    []pmoCreatedIssue
+	reassignedIssues []db.Issue
 }
 
 // ApplyRun applies a preview_ready run in one transaction. It re-reads the
@@ -177,6 +179,9 @@ func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUI
 	// create events. Nothing about snapshot content is logged here.
 	for _, created := range result.createdIssues {
 		s.IssueSvc.afterCreate(ctx, IssueCreateResult{Issue: created.issue}, created.params, IssueCreateOpts{})
+	}
+	for _, issue := range result.reassignedIssues {
+		s.IssueSvc.maybeEnqueueOnAssign(ctx, issue, "member", util.UUIDToString(config.CreatedBy), time.Time{})
 	}
 	return run, nil
 }
@@ -335,12 +340,118 @@ func (s *PMOService) applySnapshotInTx(
 	if err := s.upsertAssigneeLinks(ctx, qtx, workspaceID, run.ConfigID, snapshot, byIdentity); err != nil {
 		return result, err
 	}
+	projectID := createdIDs[pmoIdentity("requirement", snapshot.Parent.Key)]
+	if !projectID.Valid {
+		projectID = byIdentity[pmoIdentity("requirement", snapshot.Parent.Key)].LocalID
+	}
+	if !projectID.Valid {
+		return result, errors.New("pmo apply: imported project id is missing")
+	}
+	createdRoot, reopenedRoot, err := s.ensurePMOOrchestrationIssue(ctx, tx, qtx, workspaceID, run.ConfigID, projectID, snapshot.Parent)
+	if err != nil {
+		return result, err
+	}
+	if createdRoot != nil {
+		result.createdIssues = append(result.createdIssues, *createdRoot)
+	}
+	if reopenedRoot != nil {
+		result.reassignedIssues = append(result.reassignedIssues, *reopenedRoot)
+	}
 	result.summary.UnresolvedAssignees = len(diff.Warnings)
 	if result.summary.UnresolvedAssignees > 0 {
 		result.reviewItems = true
 	}
 
 	return result, nil
+}
+
+func (s *PMOService) ensurePMOOrchestrationIssue(
+	ctx context.Context,
+	tx pgx.Tx,
+	qtx *db.Queries,
+	workspaceID, configID, projectID pgtype.UUID,
+	requirement PMORequirement,
+) (*pmoCreatedIssue, *db.Issue, error) {
+	config, err := qtx.GetPMOSyncConfigForUpdate(ctx, db.GetPMOSyncConfigForUpdateParams{ID: configID, WorkspaceID: workspaceID})
+	if err != nil {
+		return nil, nil, fmt.Errorf("pmo apply: reload orchestration config: %w", err)
+	}
+	if !config.OrchestrationSquadID.Valid {
+		return nil, nil, nil
+	}
+	squad, err := qtx.LockSquadForUpdate(ctx, db.LockSquadForUpdateParams{ID: config.OrchestrationSquadID, WorkspaceID: workspaceID})
+	if err != nil {
+		return nil, nil, ErrPMOOrchestrationSquad
+	}
+	leader, err := qtx.GetAgent(ctx, squad.LeaderID)
+	if err != nil || !validPMOOrchestrationSquad(workspaceID, squad, leader) {
+		return nil, nil, ErrPMOOrchestrationSquad
+	}
+
+	title := pmoProjectTitle(requirement)
+	description := pgtype.Text{String: requirement.Description, Valid: true}
+	if !config.OrchestrationIssueID.Valid {
+		params := IssueCreateParams{
+			WorkspaceID:  workspaceID,
+			Title:        title,
+			Description:  description,
+			Status:       "todo",
+			Priority:     "none",
+			AssigneeType: pgtype.Text{String: "squad", Valid: true},
+			AssigneeID:   config.OrchestrationSquadID,
+			CreatorType:  "member",
+			CreatorID:    config.CreatedBy,
+			ProjectID:    projectID,
+		}
+		created, err := s.IssueSvc.createInTx(ctx, tx, qtx, params)
+		if err != nil {
+			return nil, nil, fmt.Errorf("pmo apply: create orchestration issue: %w", err)
+		}
+		if _, err := qtx.SetPMOSyncConfigOrchestrationIssue(ctx, db.SetPMOSyncConfigOrchestrationIssueParams{
+			OrchestrationIssueID: created.Issue.ID,
+			ID:                   config.ID,
+			WorkspaceID:          workspaceID,
+		}); err != nil {
+			return nil, nil, fmt.Errorf("pmo apply: link orchestration issue: %w", err)
+		}
+		return &pmoCreatedIssue{issue: created.Issue, params: params}, nil, nil
+	}
+
+	root, err := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: config.OrchestrationIssueID, WorkspaceID: workspaceID})
+	if err != nil || !root.ProjectID.Valid || root.ProjectID != projectID {
+		return nil, nil, ErrPMOOrchestrationIssueLink
+	}
+	reopened := !pmoProjectStatusTerminal(requirement.Status) && (root.Status == "done" || root.Status == "cancelled")
+	status := root.Status
+	if reopened {
+		status = "todo"
+	}
+	root, err = qtx.UpdateIssue(ctx, db.UpdateIssueParams{
+		ID:            root.ID,
+		Title:         pgtype.Text{String: title, Valid: true},
+		Description:   description,
+		Status:        pgtype.Text{String: status, Valid: true},
+		Priority:      pgtype.Text{String: root.Priority, Valid: true},
+		AssigneeType:  root.AssigneeType,
+		AssigneeID:    root.AssigneeID,
+		Position:      pgtype.Float8{Float64: root.Position, Valid: true},
+		StartDate:     root.StartDate,
+		DueDate:       root.DueDate,
+		ParentIssueID: root.ParentIssueID,
+		ProjectID:     root.ProjectID,
+		Stage:         root.Stage,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("pmo apply: update orchestration issue: %w", err)
+	}
+	if reopened {
+		return nil, &root, nil
+	}
+	return nil, nil, nil
+}
+
+func pmoProjectStatusTerminal(status string) bool {
+	return status == "completed" || status == "cancelled"
 }
 
 func countDecisions(entity PMOEntityDiff, decision PMOFieldDecision) int {
