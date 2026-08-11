@@ -3,6 +3,11 @@ SELECT * FROM project
 WHERE workspace_id = $1
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR priority = sqlc.narg('priority'))
+  AND (
+    sqlc.arg('archived_mode')::text = 'all'
+    OR (sqlc.arg('archived_mode')::text = 'only' AND archived_at IS NOT NULL)
+    OR (sqlc.arg('archived_mode')::text = 'active' AND archived_at IS NULL)
+  )
 ORDER BY created_at DESC;
 
 -- name: GetProject :one
@@ -58,6 +63,56 @@ RETURNING *;
 -- name: DeleteProject :exec
 -- Defense-in-depth: workspace_id is a SQL-layer tenant guard. See DeleteIssue.
 DELETE FROM project WHERE id = $1 AND workspace_id = $2;
+
+-- name: ArchiveProject :one
+UPDATE project
+SET archived_at = COALESCE(archived_at, now()),
+    archived_by = CASE WHEN archived_at IS NULL THEN @archived_by ELSE archived_by END,
+    updated_at = CASE WHEN archived_at IS NULL THEN now() ELSE updated_at END
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: RestoreProject :one
+UPDATE project
+SET archived_at = NULL,
+    archived_by = NULL,
+    updated_at = CASE WHEN archived_at IS NULL THEN updated_at ELSE now() END
+WHERE id = @id AND workspace_id = @workspace_id
+RETURNING *;
+
+-- name: TryAutoArchivePMOProject :one
+UPDATE project AS p
+SET archived_at = COALESCE(p.archived_at, now()),
+    archived_by = CASE WHEN p.archived_at IS NULL THEN NULL ELSE p.archived_by END,
+    updated_at = CASE WHEN p.archived_at IS NULL THEN now() ELSE p.updated_at END
+WHERE p.id = @id
+  AND p.workspace_id = @workspace_id
+  AND p.status IN ('completed', 'cancelled')
+  AND EXISTS (
+      SELECT 1
+      FROM pmo_sync_link AS l
+      WHERE l.workspace_id = p.workspace_id
+        AND l.local_type = 'project'
+        AND l.local_id = p.id
+        AND l.external_type = 'requirement'
+        AND l.parent_external_key IS NULL
+        AND l.externally_removed_at IS NULL
+        AND l.baseline_external->>'status' IN ('completed', 'cancelled')
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM issue AS i
+      WHERE i.workspace_id = p.workspace_id
+        AND i.project_id = p.id
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM issue AS i
+      WHERE i.workspace_id = p.workspace_id
+        AND i.project_id = p.id
+        AND i.status NOT IN ('done', 'cancelled')
+  )
+RETURNING p.*;
 
 -- name: CountIssuesByProject :one
 SELECT count(*) FROM issue

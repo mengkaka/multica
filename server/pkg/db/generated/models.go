@@ -1169,19 +1169,21 @@ type PinnedItem struct {
 }
 
 type PmoSyncConfig struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	Name               string             `json:"name"`
-	AgentID            pgtype.UUID        `json:"agent_id"`
-	RootExternalKey    string             `json:"root_external_key"`
-	WorkloadPropertyID pgtype.UUID        `json:"workload_property_id"`
-	ScheduleEnabled    bool               `json:"schedule_enabled"`
-	NextRunAt          pgtype.Timestamptz `json:"next_run_at"`
-	LastRunAt          pgtype.Timestamptz `json:"last_run_at"`
-	LastAppliedAt      pgtype.Timestamptz `json:"last_applied_at"`
-	CreatedBy          pgtype.UUID        `json:"created_by"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	ID                   pgtype.UUID        `json:"id"`
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	Name                 string             `json:"name"`
+	AgentID              pgtype.UUID        `json:"agent_id"`
+	RootExternalKey      string             `json:"root_external_key"`
+	WorkloadPropertyID   pgtype.UUID        `json:"workload_property_id"`
+	ScheduleEnabled      bool               `json:"schedule_enabled"`
+	NextRunAt            pgtype.Timestamptz `json:"next_run_at"`
+	LastRunAt            pgtype.Timestamptz `json:"last_run_at"`
+	LastAppliedAt        pgtype.Timestamptz `json:"last_applied_at"`
+	CreatedBy            pgtype.UUID        `json:"created_by"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	OrchestrationSquadID pgtype.UUID        `json:"orchestration_squad_id"`
+	OrchestrationIssueID pgtype.UUID        `json:"orchestration_issue_id"`
 }
 
 type PmoSyncLink struct {
@@ -1237,6 +1239,8 @@ type Project struct {
 	Priority    string             `json:"priority"`
 	StartDate   pgtype.Date        `json:"start_date"`
 	DueDate     pgtype.Date        `json:"due_date"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+	ArchivedBy  pgtype.UUID        `json:"archived_by"`
 }
 
 type ProjectResource struct {

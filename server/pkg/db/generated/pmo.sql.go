@@ -36,7 +36,7 @@ SET next_run_at = now() + interval '30 minutes',
     updated_at = now()
 FROM candidate
 WHERE c.id = candidate.id
-RETURNING c.id, c.workspace_id, c.name, c.agent_id, c.root_external_key, c.workload_property_id, c.schedule_enabled, c.next_run_at, c.last_run_at, c.last_applied_at, c.created_by, c.created_at, c.updated_at
+RETURNING c.id, c.workspace_id, c.name, c.agent_id, c.root_external_key, c.workload_property_id, c.schedule_enabled, c.next_run_at, c.last_run_at, c.last_applied_at, c.created_by, c.created_at, c.updated_at, c.orchestration_squad_id, c.orchestration_issue_id
 `
 
 func (q *Queries) ClaimDuePMOSyncConfig(ctx context.Context) (PmoSyncConfig, error) {
@@ -56,6 +56,8 @@ func (q *Queries) ClaimDuePMOSyncConfig(ctx context.Context) (PmoSyncConfig, err
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }
@@ -102,19 +104,20 @@ func (q *Queries) ClearPMOSyncLinkExternallyRemoved(ctx context.Context, arg Cle
 
 const createPMOSyncConfig = `-- name: CreatePMOSyncConfig :one
 INSERT INTO pmo_sync_config (
-    workspace_id, name, agent_id, root_external_key, created_by
+    workspace_id, name, agent_id, root_external_key, orchestration_squad_id, created_by
 ) VALUES (
-    $1, $2, $3, $4, $5
+    $1, $2, $3, $4, $6, $5
 )
-RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id
 `
 
 type CreatePMOSyncConfigParams struct {
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	Name            string      `json:"name"`
-	AgentID         pgtype.UUID `json:"agent_id"`
-	RootExternalKey string      `json:"root_external_key"`
-	CreatedBy       pgtype.UUID `json:"created_by"`
+	WorkspaceID          pgtype.UUID `json:"workspace_id"`
+	Name                 string      `json:"name"`
+	AgentID              pgtype.UUID `json:"agent_id"`
+	RootExternalKey      string      `json:"root_external_key"`
+	CreatedBy            pgtype.UUID `json:"created_by"`
+	OrchestrationSquadID pgtype.UUID `json:"orchestration_squad_id"`
 }
 
 func (q *Queries) CreatePMOSyncConfig(ctx context.Context, arg CreatePMOSyncConfigParams) (PmoSyncConfig, error) {
@@ -124,6 +127,7 @@ func (q *Queries) CreatePMOSyncConfig(ctx context.Context, arg CreatePMOSyncConf
 		arg.AgentID,
 		arg.RootExternalKey,
 		arg.CreatedBy,
+		arg.OrchestrationSquadID,
 	)
 	var i PmoSyncConfig
 	err := row.Scan(
@@ -140,6 +144,8 @@ func (q *Queries) CreatePMOSyncConfig(ctx context.Context, arg CreatePMOSyncConf
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }
@@ -393,7 +399,7 @@ func (q *Queries) GetIssuePropertyByWorkspaceAndName(ctx context.Context, arg Ge
 }
 
 const getPMOSyncConfig = `-- name: GetPMOSyncConfig :one
-SELECT id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at FROM pmo_sync_config
+SELECT id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id FROM pmo_sync_config
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -419,12 +425,14 @@ func (q *Queries) GetPMOSyncConfig(ctx context.Context, arg GetPMOSyncConfigPara
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }
 
 const getPMOSyncConfigForUpdate = `-- name: GetPMOSyncConfigForUpdate :one
-SELECT id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at FROM pmo_sync_config
+SELECT id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id FROM pmo_sync_config
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
 `
@@ -451,6 +459,8 @@ func (q *Queries) GetPMOSyncConfigForUpdate(ctx context.Context, arg GetPMOSyncC
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }
@@ -604,7 +614,7 @@ func (q *Queries) GetPMOSyncRunForUpdate(ctx context.Context, arg GetPMOSyncRunF
 }
 
 const listPMOSyncConfigs = `-- name: ListPMOSyncConfigs :many
-SELECT id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at FROM pmo_sync_config
+SELECT id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id FROM pmo_sync_config
 WHERE workspace_id = $1
 ORDER BY updated_at DESC, created_at DESC
 `
@@ -632,6 +642,8 @@ func (q *Queries) ListPMOSyncConfigs(ctx context.Context, workspaceID pgtype.UUI
 			&i.CreatedBy,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OrchestrationSquadID,
+			&i.OrchestrationIssueID,
 		); err != nil {
 			return nil, err
 		}
@@ -811,7 +823,7 @@ SET last_applied_at = now(),
     END,
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id
 `
 
 type MarkPMOSyncConfigAppliedParams struct {
@@ -836,6 +848,8 @@ func (q *Queries) MarkPMOSyncConfigApplied(ctx context.Context, arg MarkPMOSyncC
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }
@@ -845,7 +859,7 @@ UPDATE pmo_sync_config
 SET last_run_at = now(),
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id
 `
 
 type MarkPMOSyncConfigRunStartedParams struct {
@@ -870,6 +884,8 @@ func (q *Queries) MarkPMOSyncConfigRunStarted(ctx context.Context, arg MarkPMOSy
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }
@@ -1086,12 +1102,51 @@ func (q *Queries) SetPMOAssigneeMapping(ctx context.Context, arg SetPMOAssigneeM
 	return i, err
 }
 
+const setPMOSyncConfigOrchestrationIssue = `-- name: SetPMOSyncConfigOrchestrationIssue :one
+UPDATE pmo_sync_config
+SET orchestration_issue_id = $1,
+    updated_at = now()
+WHERE id = $2
+  AND workspace_id = $3
+  AND orchestration_issue_id IS NULL
+RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id
+`
+
+type SetPMOSyncConfigOrchestrationIssueParams struct {
+	OrchestrationIssueID pgtype.UUID `json:"orchestration_issue_id"`
+	ID                   pgtype.UUID `json:"id"`
+	WorkspaceID          pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) SetPMOSyncConfigOrchestrationIssue(ctx context.Context, arg SetPMOSyncConfigOrchestrationIssueParams) (PmoSyncConfig, error) {
+	row := q.db.QueryRow(ctx, setPMOSyncConfigOrchestrationIssue, arg.OrchestrationIssueID, arg.ID, arg.WorkspaceID)
+	var i PmoSyncConfig
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.AgentID,
+		&i.RootExternalKey,
+		&i.WorkloadPropertyID,
+		&i.ScheduleEnabled,
+		&i.NextRunAt,
+		&i.LastRunAt,
+		&i.LastAppliedAt,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
+	)
+	return i, err
+}
+
 const setPMOSyncConfigWorkloadProperty = `-- name: SetPMOSyncConfigWorkloadProperty :one
 UPDATE pmo_sync_config
 SET workload_property_id = $3,
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id
 `
 
 type SetPMOSyncConfigWorkloadPropertyParams struct {
@@ -1117,6 +1172,8 @@ func (q *Queries) SetPMOSyncConfigWorkloadProperty(ctx context.Context, arg SetP
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }
@@ -1265,22 +1322,24 @@ SET name = $3,
     agent_id = $4,
     root_external_key = $5,
     schedule_enabled = $6,
+    orchestration_squad_id = $7,
     next_run_at = CASE
         WHEN $6::boolean THEN COALESCE(next_run_at, now() + interval '30 minutes')
         ELSE NULL
     END,
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at
+RETURNING id, workspace_id, name, agent_id, root_external_key, workload_property_id, schedule_enabled, next_run_at, last_run_at, last_applied_at, created_by, created_at, updated_at, orchestration_squad_id, orchestration_issue_id
 `
 
 type UpdatePMOSyncConfigParams struct {
-	ID              pgtype.UUID `json:"id"`
-	WorkspaceID     pgtype.UUID `json:"workspace_id"`
-	Name            string      `json:"name"`
-	AgentID         pgtype.UUID `json:"agent_id"`
-	RootExternalKey string      `json:"root_external_key"`
-	ScheduleEnabled bool        `json:"schedule_enabled"`
+	ID                   pgtype.UUID `json:"id"`
+	WorkspaceID          pgtype.UUID `json:"workspace_id"`
+	Name                 string      `json:"name"`
+	AgentID              pgtype.UUID `json:"agent_id"`
+	RootExternalKey      string      `json:"root_external_key"`
+	ScheduleEnabled      bool        `json:"schedule_enabled"`
+	OrchestrationSquadID pgtype.UUID `json:"orchestration_squad_id"`
 }
 
 func (q *Queries) UpdatePMOSyncConfig(ctx context.Context, arg UpdatePMOSyncConfigParams) (PmoSyncConfig, error) {
@@ -1291,6 +1350,7 @@ func (q *Queries) UpdatePMOSyncConfig(ctx context.Context, arg UpdatePMOSyncConf
 		arg.AgentID,
 		arg.RootExternalKey,
 		arg.ScheduleEnabled,
+		arg.OrchestrationSquadID,
 	)
 	var i PmoSyncConfig
 	err := row.Scan(
@@ -1307,6 +1367,8 @@ func (q *Queries) UpdatePMOSyncConfig(ctx context.Context, arg UpdatePMOSyncConf
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OrchestrationSquadID,
+		&i.OrchestrationIssueID,
 	)
 	return i, err
 }

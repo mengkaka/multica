@@ -14,9 +14,9 @@ FOR UPDATE;
 
 -- name: CreatePMOSyncConfig :one
 INSERT INTO pmo_sync_config (
-    workspace_id, name, agent_id, root_external_key, created_by
+    workspace_id, name, agent_id, root_external_key, orchestration_squad_id, created_by
 ) VALUES (
-    $1, $2, $3, $4, $5
+    $1, $2, $3, $4, sqlc.narg('orchestration_squad_id'), $5
 )
 RETURNING *;
 
@@ -26,12 +26,22 @@ SET name = $3,
     agent_id = $4,
     root_external_key = $5,
     schedule_enabled = $6,
+    orchestration_squad_id = sqlc.narg('orchestration_squad_id'),
     next_run_at = CASE
         WHEN $6::boolean THEN COALESCE(next_run_at, now() + interval '30 minutes')
         ELSE NULL
     END,
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
+RETURNING *;
+
+-- name: SetPMOSyncConfigOrchestrationIssue :one
+UPDATE pmo_sync_config
+SET orchestration_issue_id = @orchestration_issue_id,
+    updated_at = now()
+WHERE id = @id
+  AND workspace_id = @workspace_id
+  AND orchestration_issue_id IS NULL
 RETURNING *;
 
 -- name: SetPMOSyncConfigWorkloadProperty :one
