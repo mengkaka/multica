@@ -368,7 +368,8 @@ type applyPMOConflictResolution struct {
 // resolutions).
 func (h *Handler) ApplyPMORun(w http.ResponseWriter, r *http.Request) {
 	workspaceID := h.resolveWorkspaceID(r)
-	if _, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin"); !ok {
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
+	if !ok {
 		return
 	}
 	runID, workspaceUUID, ok := parsePMOResourceIDs(w, r, workspaceID, "run id")
@@ -392,7 +393,7 @@ func (h *Handler) ApplyPMORun(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	run, err := h.PMOService.ApplyRun(r.Context(), workspaceUUID, runID, resolutions)
+	run, changedProjects, err := h.PMOService.ApplyRunWithProjectChanges(r.Context(), workspaceUUID, runID, resolutions)
 	if err != nil {
 		switch {
 		case err == service.ErrPMORunNotFound:
@@ -410,6 +411,9 @@ func (h *Handler) ApplyPMORun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to apply PMO run")
 		}
 		return
+	}
+	for _, project := range changedProjects {
+		h.publishProjectUpdated(r.Context(), project, "member", uuidToString(member.UserID))
 	}
 	writeJSON(w, http.StatusOK, pmoRunToResponse(run))
 }

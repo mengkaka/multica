@@ -391,6 +391,7 @@ SET archived_at = COALESCE(p.archived_at, now()),
     updated_at = CASE WHEN p.archived_at IS NULL THEN now() ELSE p.updated_at END
 WHERE p.id = $1
   AND p.workspace_id = $2
+  AND p.archived_at IS NULL
   AND p.status IN ('completed', 'cancelled')
   AND EXISTS (
       SELECT 1

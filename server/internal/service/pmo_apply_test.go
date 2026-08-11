@@ -512,6 +512,109 @@ func TestApplyPMORunRejectsOrchestrationIssueFromAnotherProject(t *testing.T) {
 	}
 }
 
+func TestApplyPMORunAutoArchiveTruthTable(t *testing.T) {
+	cases := []struct {
+		name        string
+		parent      string
+		child       string
+		withIssue   bool
+		wantArchive bool
+	}{
+		{name: "external active", parent: "planned", child: "done", withIssue: true},
+		{name: "zero issues", parent: "completed", withIssue: false},
+		{name: "nonterminal issue", parent: "completed", child: "todo", withIssue: true},
+		{name: "all terminal", parent: "completed", child: "done", withIssue: true, wantArchive: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newPMOApplyFixture(t)
+			var children []map[string]any
+			if tc.withIssue {
+				children = []map[string]any{pmoChildWithTasks(t, "EXT-I-001", "I-001", "Child", tc.child, 2)}
+			}
+			snapshot := buildPMOSnapshotJSON(t,
+				pmoRequirement("EXT-P-001", "REQ-1234", "Archive truth table", tc.parent, tc.parent, 1),
+				children, nil)
+			run := seedPMOPreview(t, f, snapshot)
+			_, changedProjects, err := f.svc.ApplyRunWithProjectChanges(context.Background(), f.workspaceID, run.ID, nil)
+			if err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if got := len(changedProjects); (got == 1) != tc.wantArchive || got > 1 {
+				t.Fatalf("changed projects = %d, want changed=%v", got, tc.wantArchive)
+			}
+			projectID := pmoLinkByExternal(t, f, "requirement", "EXT-P-001").LocalID
+			project, err := f.svc.Queries.GetProjectInWorkspace(context.Background(), db.GetProjectInWorkspaceParams{ID: projectID, WorkspaceID: f.workspaceID})
+			if err != nil {
+				t.Fatalf("get project: %v", err)
+			}
+			if project.ArchivedAt.Valid != tc.wantArchive {
+				t.Fatalf("archived = %v, want %v", project.ArchivedAt.Valid, tc.wantArchive)
+			}
+		})
+	}
+}
+
+func TestApplyPMORunRearchivesManualRestoreAndRestoresExternalReopen(t *testing.T) {
+	f := newPMOApplyFixture(t)
+	ctx := context.Background()
+	terminal := buildPMOSnapshotJSON(t,
+		pmoRequirement("EXT-P-001", "REQ-1234", "Archive lifecycle", "completed", "completed", 1),
+		[]map[string]any{pmoChildWithTasks(t, "EXT-I-001", "I-001", "Child", "done", 2)}, nil)
+	run := seedPMOPreview(t, f, terminal)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("terminal apply: %v", err)
+	}
+	projectID := pmoLinkByExternal(t, f, "requirement", "EXT-P-001").LocalID
+	if _, err := f.svc.Queries.RestoreProject(ctx, db.RestoreProjectParams{ID: projectID, WorkspaceID: f.workspaceID}); err != nil {
+		t.Fatalf("manual restore: %v", err)
+	}
+	run = seedPMOPreview(t, f, terminal)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("terminal reapply: %v", err)
+	}
+	project, err := f.svc.Queries.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{ID: projectID, WorkspaceID: f.workspaceID})
+	if err != nil || !project.ArchivedAt.Valid {
+		t.Fatalf("terminal project not rearchived: %+v, %v", project, err)
+	}
+
+	active := buildPMOSnapshotJSON(t,
+		pmoRequirement("EXT-P-001", "REQ-1234", "Archive lifecycle", "in_progress", "in_progress", 1),
+		[]map[string]any{pmoChildWithTasks(t, "EXT-I-001", "I-001", "Child", "done", 2)}, nil)
+	run = seedPMOPreview(t, f, active)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("reopen apply: %v", err)
+	}
+	project, err = f.svc.Queries.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{ID: projectID, WorkspaceID: f.workspaceID})
+	if err != nil || project.ArchivedAt.Valid {
+		t.Fatalf("reopened project still archived: %+v, %v", project, err)
+	}
+}
+
+func TestApplyPMORunDoesNotArchiveActiveCanonicalProject(t *testing.T) {
+	f := newPMOApplyFixture(t)
+	ctx := context.Background()
+	terminal := buildPMOSnapshotJSON(t,
+		pmoRequirement("EXT-P-001", "REQ-1234", "Canonical active", "completed", "completed", 1),
+		[]map[string]any{pmoChildWithTasks(t, "EXT-I-001", "I-001", "Child", "done", 2)}, nil)
+	run := seedPMOPreview(t, f, terminal)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("initial apply: %v", err)
+	}
+	projectID := pmoLinkByExternal(t, f, "requirement", "EXT-P-001").LocalID
+	if _, err := f.pool.Exec(ctx, `UPDATE project SET status = 'planned', archived_at = NULL, archived_by = NULL WHERE id = $1`, projectID); err != nil {
+		t.Fatalf("locally reactivate project: %v", err)
+	}
+	run = seedPMOPreview(t, f, terminal)
+	if _, err := f.svc.ApplyRun(ctx, f.workspaceID, run.ID, nil); err != nil {
+		t.Fatalf("reapply: %v", err)
+	}
+	project, err := f.svc.Queries.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{ID: projectID, WorkspaceID: f.workspaceID})
+	if err != nil || project.Status != "planned" || project.ArchivedAt.Valid {
+		t.Fatalf("active canonical project archived: %+v, %v", project, err)
+	}
+}
+
 func TestApplyPMORunIdempotentRerun(t *testing.T) {
 	f := newPMOApplyFixture(t)
 	ctx := context.Background()

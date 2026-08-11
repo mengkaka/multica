@@ -2832,6 +2832,17 @@ func (h *Handler) updateIssueWithDescriptionMerge(ctx context.Context, workspace
 	defer tx.Rollback(ctx)
 
 	qtx := h.Queries.WithTx(tx)
+	issue, current, err := h.updateIssueWithDescriptionMergeInTx(ctx, qtx, workspaceID, params, rawFields, base)
+	if err != nil {
+		return db.Issue{}, db.Issue{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.Issue{}, db.Issue{}, fmt.Errorf("commit issue description update: %w", err)
+	}
+	return issue, current, nil
+}
+
+func (h *Handler) updateIssueWithDescriptionMergeInTx(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, params db.UpdateIssueParams, rawFields map[string]json.RawMessage, base *string) (db.Issue, db.Issue, error) {
 	current, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
 		ID:          params.ID,
 		WorkspaceID: workspaceID,
@@ -2864,9 +2875,6 @@ func (h *Handler) updateIssueWithDescriptionMerge(ctx context.Context, workspace
 	issue, err := qtx.UpdateIssue(ctx, params)
 	if err != nil {
 		return db.Issue{}, db.Issue{}, fmt.Errorf("update locked issue description: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.Issue{}, db.Issue{}, fmt.Errorf("commit issue description update: %w", err)
 	}
 	return issue, current, nil
 }
@@ -3064,21 +3072,46 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin issue update")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
 	var issue db.Issue
 	if req.Description != nil {
 		var lockedPrev db.Issue
-		issue, lockedPrev, err = h.updateIssueWithDescriptionMerge(
-			r.Context(), prevIssue.WorkspaceID, params, rawFields, req.DescriptionBase,
+		issue, lockedPrev, err = h.updateIssueWithDescriptionMergeInTx(
+			r.Context(), qtx, prevIssue.WorkspaceID, params, rawFields, req.DescriptionBase,
 		)
 		if err == nil {
 			prevIssue = lockedPrev
 		}
 	} else {
-		issue, err = h.Queries.UpdateIssue(r.Context(), params)
+		issue, err = qtx.UpdateIssue(r.Context(), params)
 	}
 	if err != nil {
 		slog.Warn("update issue failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
 		writeError(w, http.StatusInternalServerError, "failed to update issue: "+err.Error())
+		return
+	}
+	var archivedProject *db.Project
+	if !isTerminalChildStatus(prevIssue.Status) && isTerminalChildStatus(issue.Status) && issue.ProjectID.Valid {
+		project, archiveErr := qtx.TryAutoArchivePMOProject(r.Context(), db.TryAutoArchivePMOProjectParams{
+			ID: issue.ProjectID, WorkspaceID: issue.WorkspaceID,
+		})
+		if archiveErr == nil {
+			archivedProject = &project
+		} else if !errors.Is(archiveErr, pgx.ErrNoRows) {
+			slog.Warn("auto archive project after issue update failed", "issue_id", id, "error", archiveErr)
+			writeError(w, http.StatusInternalServerError, "failed to reconcile project archive state")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit issue update")
 		return
 	}
 
@@ -3132,6 +3165,9 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"creator_type":        prevIssue.CreatorType,
 		"creator_id":          uuidToString(prevIssue.CreatorID),
 	})
+	if archivedProject != nil {
+		h.publishProjectUpdated(r.Context(), *archivedProject, actorType, actorID)
+	}
 
 	// Reconcile the task queue. Whether this write starts an agent run — and
 	// for whom (agent assignee or squad leader) — is decided by the single
@@ -3426,6 +3462,15 @@ type BatchUpdateIssueSkippedResponse struct {
 	Reason     string `json:"reason"`
 }
 
+type batchIssueUpdateEffect struct {
+	previous        db.Issue
+	issue           db.Issue
+	assigneeChanged bool
+	statusChanged   bool
+	priorityChanged bool
+	projectChanged  bool
+}
+
 func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -3498,8 +3543,18 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to begin batch issue update")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
 	updated := 0
 	skipped := []BatchUpdateIssueSkippedResponse{}
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	effects := make([]batchIssueUpdateEffect, 0, len(req.IssueIDs))
+	projectIDs := map[pgtype.UUID]struct{}{}
 	// Children that transitioned into a terminal status this batch, collected so
 	// the parent/stage notification is evaluated once against the final state
 	// after the loop (MUL-4155) rather than per-child mid-batch.
@@ -3509,7 +3564,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		prevIssue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+		prevIssue, err := qtx.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
 			ID:          issueUUID,
 			WorkspaceID: wsUUID,
 		})
@@ -3595,7 +3650,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				// Validate parent exists in the same workspace.
-				if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+				if _, err := qtx.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
 					ID:          newParentID,
 					WorkspaceID: prevIssue.WorkspaceID,
 				}); err != nil {
@@ -3605,7 +3660,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				cycleDetected := false
 				cursor := newParentID
 				for depth := 0; depth < 10; depth++ {
-					ancestor, err := h.Queries.GetIssue(r.Context(), cursor)
+					ancestor, err := qtx.GetIssue(r.Context(), cursor)
 					if err != nil || !ancestor.ParentIssueID.Valid {
 						break
 					}
@@ -3678,58 +3733,37 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			// Preserve every marked channel-media block conservatively, matching
 			// legacy single-update clients that omit description_base.
 			var lockedPrev db.Issue
-			issue, lockedPrev, err = h.updateIssueWithDescriptionMerge(
-				r.Context(), prevIssue.WorkspaceID, params, rawUpdates, nil,
+			issue, lockedPrev, err = h.updateIssueWithDescriptionMergeInTx(
+				r.Context(), qtx, prevIssue.WorkspaceID, params, rawUpdates, nil,
 			)
 			if err == nil {
 				prevIssue = lockedPrev
 			}
 		} else {
-			issue, err = h.Queries.UpdateIssue(r.Context(), params)
+			issue, err = qtx.UpdateIssue(r.Context(), params)
 		}
 		if err != nil {
 			slog.Warn("batch update issue failed", "issue_id", issueID, "error", err)
-			continue
+			writeError(w, http.StatusInternalServerError, "failed to update issue")
+			return
 		}
-
-		prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-		resp := issueToResponse(issue, prefix)
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 		assigneeChanged := (req.Updates.AssigneeType != nil || req.Updates.AssigneeID != nil) &&
 			(prevIssue.AssigneeType.String != issue.AssigneeType.String || uuidToString(prevIssue.AssigneeID) != uuidToString(issue.AssigneeID))
 		statusChanged := req.Updates.Status != nil && prevIssue.Status != issue.Status
 		priorityChanged := req.Updates.Priority != nil && prevIssue.Priority != issue.Priority
 		projectChanged := req.Updates.ProjectID != nil && uuidToString(prevIssue.ProjectID) != uuidToString(issue.ProjectID)
-
-		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
-			"issue":            resp,
-			"assignee_changed": assigneeChanged,
-			"status_changed":   statusChanged,
-			"priority_changed": priorityChanged,
-			"project_changed":  projectChanged,
+		effects = append(effects, batchIssueUpdateEffect{
+			previous:        prevIssue,
+			issue:           issue,
+			assigneeChanged: assigneeChanged,
+			statusChanged:   statusChanged,
+			priorityChanged: priorityChanged,
+			projectChanged:  projectChanged,
 		})
-
-		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
-		// mirrors UpdateIssue. See that handler for the rationale.
-		//
-		// Same single predicate as UpdateIssue — batch must not grow its own
-		// copy of the enqueue rule (the historical source of four-entry-point
-		// drift, MUL-3375). suppress_run applies batch-wide.
-		if trigger, ok := h.IssueService.WillEnqueueRun(r.Context(),
-			service.IssueTriggerInput{
-				Issue:           issue,
-				PrevStatus:      prevIssue.Status,
-				AssigneeChanged: assigneeChanged,
-				StatusChanged:   statusChanged,
-			},
-			h.issueTriggerWriteProbe(r, actorType, issue),
-		); ok && !req.Updates.SuppressRun {
-			h.dispatchIssueRun(r.Context(), issue, trigger, actorType, actorID, req.Updates.HandoffNote)
+		if statusChanged && !isTerminalChildStatus(prevIssue.Status) && isTerminalChildStatus(issue.Status) && issue.ProjectID.Valid {
+			projectIDs[issue.ProjectID] = struct{}{}
 		}
-
-		// No status change — not even → cancelled — cancels active tasks here,
-		// mirroring UpdateIssue (MUL-4465). See that handler for the rationale.
 
 		// Platform-driven parent notification, mirrored from UpdateIssue
 		// (MUL-2538) but DEFERRED to after the loop. Evaluating the stage
@@ -3745,6 +3779,51 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 
 		updated++
+	}
+
+	changedProjects := make([]db.Project, 0, len(projectIDs))
+	for projectID := range projectIDs {
+		project, err := qtx.TryAutoArchivePMOProject(r.Context(), db.TryAutoArchivePMOProjectParams{ID: projectID, WorkspaceID: wsUUID})
+		if err == nil {
+			changedProjects = append(changedProjects, project)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("auto archive project after batch issue update failed", "project_id", uuidToString(projectID), "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to reconcile project archive state")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit batch issue update")
+		return
+	}
+
+	for _, effect := range effects {
+		prefix := h.getIssuePrefix(r.Context(), effect.issue.WorkspaceID)
+		resp := issueToResponse(effect.issue, prefix)
+		h.publish(protocol.EventIssueUpdated, workspaceID, actorType, actorID, map[string]any{
+			"issue":            resp,
+			"assignee_changed": effect.assigneeChanged,
+			"status_changed":   effect.statusChanged,
+			"priority_changed": effect.priorityChanged,
+			"project_changed":  effect.projectChanged,
+		})
+
+		// Reassignment does not cancel existing tasks (#4963 / MUL-4113) —
+		// mirrors UpdateIssue. See that handler for the rationale.
+		if trigger, ok := h.IssueService.WillEnqueueRun(r.Context(),
+			service.IssueTriggerInput{
+				Issue:           effect.issue,
+				PrevStatus:      effect.previous.Status,
+				AssigneeChanged: effect.assigneeChanged,
+				StatusChanged:   effect.statusChanged,
+			},
+			h.issueTriggerWriteProbe(r, actorType, effect.issue),
+		); ok && !req.Updates.SuppressRun {
+			h.dispatchIssueRun(r.Context(), effect.issue, trigger, actorType, actorID, req.Updates.HandoffNote)
+		}
+	}
+	for _, project := range changedProjects {
+		h.publishProjectUpdated(r.Context(), project, actorType, actorID)
 	}
 
 	// Aggregate parent/stage notification over the whole batch's final state so

@@ -67,6 +67,13 @@ func projectToResponse(p db.Project) ProjectResponse {
 	}
 }
 
+func (h *Handler) publishProjectUpdated(ctx context.Context, project db.Project, actorType, actorID string) {
+	resp := projectToResponse(project)
+	resp.IssueCount, resp.DoneCount = h.loadProjectIssueStats(ctx, project.ID)
+	resp.ResourceCount = h.loadProjectResourceCount(ctx, project.ID)
+	h.publish(protocol.EventProjectUpdated, uuidToString(project.WorkspaceID), actorType, actorID, map[string]any{"project": resp})
+}
+
 func (h *Handler) loadProjectIssueStats(ctx context.Context, projectID pgtype.UUID) (int64, int64) {
 	stats, err := h.Queries.GetProjectIssueStats(ctx, []pgtype.UUID{projectID})
 	if err != nil || len(stats) == 0 {

@@ -109,7 +109,8 @@ func (h *Handler) pmoAutoApplyScheduledRun(ctx context.Context, pmoCtx service.P
 	if run.Trigger != "scheduled" {
 		return
 	}
-	if _, err := h.PMOService.ApplyRun(ctx, workspaceID, run.ID, nil); err != nil {
+	_, changedProjects, err := h.PMOService.ApplyRunWithProjectChanges(ctx, workspaceID, run.ID, nil)
+	if err != nil {
 		bounded := boundPMORunError(err.Error())
 		slog.Warn("pmo sync auto-apply failed; run kept preview_ready for review",
 			"task_id", taskID, "run_id", pmoCtx.RunID, "error", bounded)
@@ -122,6 +123,10 @@ func (h *Handler) pmoAutoApplyScheduledRun(ctx context.Context, pmoCtx service.P
 			slog.Warn("pmo sync auto-apply: persist apply error failed",
 				"run_id", pmoCtx.RunID, "error", perr)
 		}
+		return
+	}
+	for _, project := range changedProjects {
+		h.publishProjectUpdated(ctx, project, "system", "")
 	}
 }
 

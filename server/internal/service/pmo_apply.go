@@ -85,6 +85,7 @@ type pmoApplyResult struct {
 	summary          pmoRunApplySummary
 	createdIssues    []pmoCreatedIssue
 	reassignedIssues []db.Issue
+	changedProjects  []db.Project
 }
 
 // ApplyRun applies a preview_ready run in one transaction. It re-reads the
@@ -98,16 +99,23 @@ type pmoApplyResult struct {
 // rolls everything back and leaves the run preview_ready for retry.
 // Scheduled auto-apply (Task 7) calls this with nil resolutions.
 func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUID, resolutions []PMOConflictResolution) (db.PmoSyncRun, error) {
+	run, _, err := s.ApplyRunWithProjectChanges(ctx, workspaceID, runID, resolutions)
+	return run, err
+}
+
+// ApplyRunWithProjectChanges also returns projects whose archive state changed
+// so handler callers can publish full project:updated events after commit.
+func (s *PMOService) ApplyRunWithProjectChanges(ctx context.Context, workspaceID, runID pgtype.UUID, resolutions []PMOConflictResolution) (db.PmoSyncRun, []db.Project, error) {
 	if err := validatePMOResolutions(resolutions); err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 	if s.IssueSvc == nil {
-		return db.PmoSyncRun{}, errors.New("pmo apply: issue service not wired")
+		return db.PmoSyncRun{}, nil, errors.New("pmo apply: issue service not wired")
 	}
 
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
@@ -115,38 +123,38 @@ func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUI
 	run, err := qtx.GetPMOSyncRunForUpdate(ctx, db.GetPMOSyncRunForUpdateParams{ID: runID, WorkspaceID: workspaceID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return db.PmoSyncRun{}, ErrPMORunNotFound
+			return db.PmoSyncRun{}, nil, ErrPMORunNotFound
 		}
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 	if run.Status != "preview_ready" {
-		return db.PmoSyncRun{}, ErrPMORunNotPreviewReady
+		return db.PmoSyncRun{}, nil, ErrPMORunNotPreviewReady
 	}
 	config, err := qtx.GetPMOSyncConfigForUpdate(ctx, db.GetPMOSyncConfigForUpdateParams{ID: run.ConfigID, WorkspaceID: workspaceID})
 	if err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 
 	// Re-validate the stored normalized snapshot through the same contract.
 	snapshot, err := ParsePMOSnapshot(string(run.SourceSnapshot))
 	if err != nil {
-		return db.PmoSyncRun{}, fmt.Errorf("pmo apply: revalidate stored snapshot: %w", err)
+		return db.PmoSyncRun{}, nil, fmt.Errorf("pmo apply: revalidate stored snapshot: %w", err)
 	}
 
 	workloadPropertyID, err := s.ensureWorkloadProperty(ctx, qtx, workspaceID, config)
 	if err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 
 	result, err := s.applySnapshotInTx(ctx, tx, qtx, workspaceID, run, snapshot, resolutions, workloadPropertyID)
 	if err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 	// Test-only seam: inject a failure inside the transaction to prove the
 	// whole hierarchy rolls back.
 	if s.applyTestHook != nil {
 		if hookErr := s.applyTestHook(ctx, qtx); hookErr != nil {
-			return db.PmoSyncRun{}, hookErr
+			return db.PmoSyncRun{}, nil, hookErr
 		}
 	}
 
@@ -156,7 +164,7 @@ func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUI
 	}
 	summaryJSON, err := json.Marshal(result.summary)
 	if err != nil {
-		return db.PmoSyncRun{}, fmt.Errorf("pmo apply: marshal summary: %w", err)
+		return db.PmoSyncRun{}, nil, fmt.Errorf("pmo apply: marshal summary: %w", err)
 	}
 	run, err = qtx.MarkPMOSyncRunApplied(ctx, db.MarkPMOSyncRunAppliedParams{
 		ID: run.ID, WorkspaceID: workspaceID,
@@ -165,14 +173,14 @@ func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUI
 		Summary: summaryJSON,
 	})
 	if err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 	if _, err := qtx.MarkPMOSyncConfigApplied(ctx, db.MarkPMOSyncConfigAppliedParams{ID: run.ConfigID, WorkspaceID: workspaceID}); err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return db.PmoSyncRun{}, err
+		return db.PmoSyncRun{}, nil, err
 	}
 
 	// Post-commit create effects only; updates and removals never publish
@@ -183,7 +191,7 @@ func (s *PMOService) ApplyRun(ctx context.Context, workspaceID, runID pgtype.UUI
 	for _, issue := range result.reassignedIssues {
 		s.IssueSvc.maybeEnqueueOnAssign(ctx, issue, "member", util.UUIDToString(config.CreatedBy), time.Time{})
 	}
-	return run, nil
+	return run, result.changedProjects, nil
 }
 
 // applySnapshotInTx performs every apply write under the caller-owned
@@ -357,6 +365,13 @@ func (s *PMOService) applySnapshotInTx(
 	if reopenedRoot != nil {
 		result.reassignedIssues = append(result.reassignedIssues, *reopenedRoot)
 	}
+	changedProject, err := s.reconcilePMOProjectArchive(ctx, qtx, workspaceID, projectID, snapshot.Parent.Status)
+	if err != nil {
+		return result, err
+	}
+	if changedProject != nil {
+		result.changedProjects = append(result.changedProjects, *changedProject)
+	}
 	result.summary.UnresolvedAssignees = len(diff.Warnings)
 	if result.summary.UnresolvedAssignees > 0 {
 		result.reviewItems = true
@@ -452,6 +467,31 @@ func (s *PMOService) ensurePMOOrchestrationIssue(
 
 func pmoProjectStatusTerminal(status string) bool {
 	return status == "completed" || status == "cancelled"
+}
+
+func (s *PMOService) reconcilePMOProjectArchive(ctx context.Context, qtx *db.Queries, workspaceID, projectID pgtype.UUID, externalStatus string) (*db.Project, error) {
+	if !pmoProjectStatusTerminal(externalStatus) {
+		current, err := qtx.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{ID: projectID, WorkspaceID: workspaceID})
+		if err != nil {
+			return nil, fmt.Errorf("pmo apply: load project archive state: %w", err)
+		}
+		restored, err := qtx.RestoreProject(ctx, db.RestoreProjectParams{ID: projectID, WorkspaceID: workspaceID})
+		if err != nil {
+			return nil, fmt.Errorf("pmo apply: restore project: %w", err)
+		}
+		if current.ArchivedAt.Valid {
+			return &restored, nil
+		}
+		return nil, nil
+	}
+	project, err := qtx.TryAutoArchivePMOProject(ctx, db.TryAutoArchivePMOProjectParams{ID: projectID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pmo apply: auto archive project: %w", err)
+	}
+	return &project, nil
 }
 
 func countDecisions(entity PMOEntityDiff, decision PMOFieldDecision) int {
