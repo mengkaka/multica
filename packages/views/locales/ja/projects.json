@@ -2,6 +2,9 @@
   "page": {
     "title": "プロジェクト",
     "new_project": "新規プロジェクト",
+    "active": "アクティブ",
+    "archived": "アーカイブ済み",
+    "empty_archived": "アーカイブ済みのプロジェクトはありません",
     "empty": "プロジェクトはまだありません",
     "create_first": "最初のプロジェクトを作成",
     "view_compact": "コンパクト",
@@ -13,6 +16,8 @@
     "row_menu": "プロジェクトの操作",
     "pin": "サイドバーにピン留め",
     "unpin": "ピン留め解除",
+    "archive": "アーカイブ",
+    "restore": "復元",
     "delete": "削除",
     "no_matches": "該当するプロジェクトはありません",
     "selected_other": "{{count}} 件選択中",
@@ -64,11 +69,14 @@
     "sidebar_tooltip": "サイドバーの開閉",
     "copy_link": "リンクをコピー",
     "delete_action": "プロジェクトを削除",
+    "archive_action": "プロジェクトをアーカイブ",
+    "restore_action": "プロジェクトを復元",
     "section_properties": "プロパティ",
     "section_progress": "進捗",
     "section_description": "説明",
     "prop_start_date": "開始日",
     "prop_due_date": "期限",
+    "prop_archive": "アーカイブ",
     "no_start_date": "開始日なし",
     "no_due_date": "期限なし",
     "description_placeholder": "説明を追加...",
@@ -79,6 +87,8 @@
     "no_issues_yet": "タスクはまだありません",
     "toast_link_copied": "リンクをコピーしました",
     "toast_project_deleted": "プロジェクトを削除しました",
+    "toast_project_archived": "プロジェクトをアーカイブしました",
+    "toast_project_restored": "プロジェクトを復元しました",
     "toast_move_issue_failed": "タスクを移動できませんでした"
   },
   "resources": {
@@ -133,6 +143,12 @@
     "title": "プロジェクトを削除",
     "description": "プロジェクトが削除されます。タスクは削除されませんが、リンクが解除されます。",
     "confirm": "削除",
+    "cancel": "キャンセル"
+  },
+  "archive_dialog": {
+    "title": "プロジェクトをアーカイブ",
+    "description": "タスク、リソース、コメント、チャット、実行履歴は引き続き利用できます。",
+    "confirm": "アーカイブ",
     "cancel": "キャンセル"
   },
   "picker": {

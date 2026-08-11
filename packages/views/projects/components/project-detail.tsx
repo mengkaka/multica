@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { Check, ChevronRight, Link2, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronRight, Link2, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { projectDetailOptions } from "@multica/core/projects/queries";
-import { useUpdateProject, useDeleteProject } from "@multica/core/projects/mutations";
+import { useArchiveProject, useDeleteProject, useRestoreProject, useUpdateProject } from "@multica/core/projects/mutations";
 import { pinListOptions } from "@multica/core/pins";
 import { useCreatePin, useDeletePin } from "@multica/core/pins";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
@@ -130,6 +130,8 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const { getActorName } = useActorName();
   const updateProject = useUpdateProject();
   const deleteProject = useDeleteProject();
+  const archiveProject = useArchiveProject();
+  const restoreProject = useRestoreProject();
   const { data: pinnedItems = [] } = useQuery({
     ...pinListOptions(wsId, userId ?? ""),
     enabled: !!userId,
@@ -145,6 +147,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const descEditorRef = useRef<ContentEditorRef>(null);
   const isMobile = useIsMobile();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [propertiesOpen, setPropertiesOpen] = useState(true);
   const [progressOpen, setProgressOpen] = useState(true);
@@ -219,6 +222,20 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       },
     });
   }, [project, deleteProject, router, wsPaths, t]);
+
+  const handleArchive = useCallback(() => {
+    if (!project) return;
+    archiveProject.mutate(project.id, {
+      onSuccess: () => toast.success(t(($) => $.detail.toast_project_archived)),
+    });
+  }, [archiveProject, project, t]);
+
+  const handleRestore = useCallback(() => {
+    if (!project) return;
+    restoreProject.mutate(project.id, {
+      onSuccess: () => toast.success(t(($) => $.detail.toast_project_restored)),
+    });
+  }, [project, restoreProject, t]);
 
   if (isLoading) {
     return (
@@ -408,6 +425,13 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
           <PropRow label={t(($) => $.detail.prop_due_date)}>
             <ProjectDueDatePicker dueDate={project.due_date} onUpdate={handleUpdateField} />
           </PropRow>
+          {project.archived_at && (
+            <PropRow label={t(($) => $.detail.prop_archive)}>
+              <span className="text-muted-foreground">
+                {t(($) => $.page.archived)}
+              </span>
+            </PropRow>
+          )}
         </div>}
       </div>
 
@@ -514,6 +538,17 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                   {isWorkspaceAdmin && (
                     <>
                       <DropdownMenuSeparator />
+                      {project.archived_at ? (
+                        <DropdownMenuItem onClick={handleRestore}>
+                          <ArchiveRestore className="h-3.5 w-3.5" />
+                          {t(($) => $.detail.restore_action)}
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={() => setArchiveDialogOpen(true)}>
+                          <Archive className="h-3.5 w-3.5" />
+                          {t(($) => $.detail.archive_action)}
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem
                         variant="destructive"
                         onClick={() => setDeleteDialogOpen(true)}
@@ -579,6 +614,25 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
       </ResizablePanelGroup>
 
       {/* Delete confirmation */}
+      {isWorkspaceAdmin && (
+        <AlertDialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t(($) => $.archive_dialog.title)}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t(($) => $.archive_dialog.description)}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t(($) => $.archive_dialog.cancel)}</AlertDialogCancel>
+              <AlertDialogAction onClick={handleArchive} className="bg-destructive text-white hover:bg-destructive/90">
+                {t(($) => $.archive_dialog.confirm)}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
       {isWorkspaceAdmin && (
         <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
           <AlertDialogContent>

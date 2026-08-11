@@ -2,6 +2,9 @@
   "page": {
     "title": "项目",
     "new_project": "新建项目",
+    "active": "活跃",
+    "archived": "已归档",
+    "empty_archived": "没有已归档的项目",
     "empty": "还没有项目",
     "create_first": "创建第一个项目",
     "view_compact": "紧凑视图",
@@ -13,6 +16,8 @@
     "row_menu": "项目操作",
     "pin": "固定到侧边栏",
     "unpin": "取消钉选",
+    "archive": "归档",
+    "restore": "恢复",
     "delete": "删除",
     "no_matches": "没有匹配的项目",
     "selected_other": "已选 {{count}} 项",
@@ -64,11 +69,14 @@
     "sidebar_tooltip": "切换侧边栏",
     "copy_link": "复制链接",
     "delete_action": "删除项目",
+    "archive_action": "归档项目",
+    "restore_action": "恢复项目",
     "section_properties": "属性",
     "section_progress": "进度",
     "section_description": "描述",
     "prop_start_date": "开始日期",
     "prop_due_date": "截止日期",
+    "prop_archive": "归档",
     "no_start_date": "无开始日期",
     "no_due_date": "无截止日期",
     "description_placeholder": "添加描述...",
@@ -79,6 +87,8 @@
     "no_issues_yet": "目前还没有任务",
     "toast_link_copied": "已复制链接",
     "toast_project_deleted": "已删除项目",
+    "toast_project_archived": "已归档项目",
+    "toast_project_restored": "已恢复项目",
     "toast_move_issue_failed": "移动任务失败"
   },
   "resources": {
@@ -133,6 +143,12 @@
     "title": "删除项目",
     "description": "将删除这个项目。任务不会被删除，只会从项目中解除关联。",
     "confirm": "删除",
+    "cancel": "取消"
+  },
+  "archive_dialog": {
+    "title": "归档项目",
+    "description": "任务、资源、评论、聊天上下文和运行历史都会保留。",
+    "confirm": "归档",
     "cancel": "取消"
   },
   "picker": {

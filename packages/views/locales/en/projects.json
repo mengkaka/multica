@@ -2,6 +2,9 @@
   "page": {
     "title": "Projects",
     "new_project": "New project",
+    "active": "Active",
+    "archived": "Archived",
+    "empty_archived": "No archived projects",
     "empty": "No projects yet",
     "create_first": "Create your first project",
     "view_compact": "Compact",
@@ -13,6 +16,8 @@
     "row_menu": "Project actions",
     "pin": "Pin to sidebar",
     "unpin": "Unpin",
+    "archive": "Archive",
+    "restore": "Restore",
     "delete": "Delete",
     "no_matches": "No projects match",
     "selected_one": "{{count}} selected",
@@ -65,11 +70,14 @@
     "sidebar_tooltip": "Toggle sidebar",
     "copy_link": "Copy link",
     "delete_action": "Delete project",
+    "archive_action": "Archive project",
+    "restore_action": "Restore project",
     "section_properties": "Properties",
     "section_progress": "Progress",
     "section_description": "Description",
     "prop_start_date": "Start date",
     "prop_due_date": "Due date",
+    "prop_archive": "Archive",
     "no_start_date": "No start date",
     "no_due_date": "No due date",
     "description_placeholder": "Add description...",
@@ -80,6 +88,8 @@
     "no_issues_yet": "No issues yet",
     "toast_link_copied": "Link copied",
     "toast_project_deleted": "Project deleted",
+    "toast_project_archived": "Project archived",
+    "toast_project_restored": "Project restored",
     "toast_move_issue_failed": "Failed to move issue"
   },
   "resources": {
@@ -134,6 +144,12 @@
     "title": "Delete project",
     "description": "This will delete the project. Issues will not be deleted but will be unlinked.",
     "confirm": "Delete",
+    "cancel": "Cancel"
+  },
+  "archive_dialog": {
+    "title": "Archive project",
+    "description": "Issues, resources, comments, chat, and run history will remain available.",
+    "confirm": "Archive",
     "cancel": "Cancel"
   },
   "picker": {

@@ -4,6 +4,8 @@ import { useCallback, useMemo, useState, type MouseEvent } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  Archive,
+  ArchiveRestore,
   ChevronDown,
   ExternalLink,
   Filter,
@@ -24,6 +26,8 @@ import {
   projectListOptions,
   useUpdateProject,
   useDeleteProject,
+  useArchiveProject,
+  useRestoreProject,
   useProjectViewStore,
   type ProjectColumnKey,
   type ProjectListFilters,
@@ -109,6 +113,7 @@ import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useFormatRelativeDate } from "./labels";
 import { ProjectStatusBadge, ProjectPriorityBadge } from "./project-badge";
 import { ProjectLeadPicker } from "./project-lead-picker";
+import { SegmentedToggle } from "../../common/segmented-toggle";
 
 // Sort order maps for the enum columns (header sort needs a total order).
 const PRIORITY_ORDER: Record<ProjectPriority, number> = {
@@ -235,7 +240,10 @@ function ProjectRowActions({
   const createPin = useCreatePin();
   const deletePin = useDeletePin();
   const deleteProject = useDeleteProject();
+  const archiveProject = useArchiveProject();
+  const restoreProject = useRestoreProject();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
 
   const togglePin = () => {
     if (pinned) deletePin.mutate({ itemType: "project", itemId: project.id });
@@ -281,6 +289,17 @@ function ProjectRowActions({
           {canDelete && (
             <>
               <DropdownMenuSeparator />
+              {project.archived_at ? (
+                <DropdownMenuItem onClick={() => restoreProject.mutate(project.id)}>
+                  <ArchiveRestore className="size-3.5" />
+                  {t(($) => $.page.restore)}
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onClick={() => setArchiveOpen(true)}>
+                  <Archive className="size-3.5" />
+                  {t(($) => $.page.archive)}
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 variant="destructive"
                 onClick={() => setDeleteOpen(true)}
@@ -325,6 +344,38 @@ function ProjectRowActions({
               }}
             >
               {t(($) => $.delete_dialog.confirm)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={archiveOpen} onOpenChange={setArchiveOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.archive_dialog.title)}</DialogTitle>
+            <DialogDescription>
+              {t(($) => $.archive_dialog.description)}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setArchiveOpen(false)}
+            >
+              {t(($) => $.archive_dialog.cancel)}
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => {
+                archiveProject.mutate(project.id);
+                setArchiveOpen(false);
+              }}
+            >
+              {t(($) => $.archive_dialog.confirm)}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -815,7 +866,10 @@ export function ProjectsPage() {
   const isCompact = viewMode === "compact";
   const isColVisible = (key: ProjectColumnKey) => !hiddenColumns.includes(key);
 
-  const { data: projects = [], isLoading } = useQuery(projectListOptions(wsId));
+  const [archiveMode, setArchiveMode] = useState<"active" | "only">("active");
+  const { data: projects = [], isLoading } = useQuery(
+    projectListOptions(wsId, archiveMode),
+  );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: pins = [] } = useQuery({
     ...pinListOptions(wsId, currentUser?.id ?? ""),
@@ -942,23 +996,38 @@ export function ProjectsPage() {
         title={t(($) => $.page.title)}
         count={projects.length}
         actions={
-          <CollectionPageHeaderAction
-            icon={Plus}
-            label={t(($) => $.page.new_project)}
-            onClick={openCreateProject}
-          />
+          <>
+            <SegmentedToggle
+              value={archiveMode}
+              options={[
+                ["active", t(($) => $.page.active)],
+                ["only", t(($) => $.page.archived)],
+              ]}
+              onChange={(mode) => {
+                setArchiveMode(mode);
+                setSelectedIds(new Set());
+              }}
+            />
+            <CollectionPageHeaderAction
+              icon={Plus}
+              label={t(($) => $.page.new_project)}
+              onClick={openCreateProject}
+            />
+          </>
         }
       />
 
       {showEmpty ? (
         <CollectionPageState
           icon={FolderKanban}
-          title={t(($) => $.page.empty)}
-          actions={
+          title={t(($) =>
+            archiveMode === "only" ? $.page.empty_archived : $.page.empty,
+          )}
+          actions={archiveMode === "active" ? (
             <Button size="sm" variant="outline" onClick={openCreateProject}>
               {t(($) => $.page.create_first)}
             </Button>
-          }
+          ) : undefined}
         />
       ) : (
         <>

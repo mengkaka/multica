@@ -528,6 +528,8 @@ describe("ChatInput project context", () => {
     issue_count: 0,
     done_count: 0,
     resource_count: 0,
+    archived_at: null,
+    archived_by: null,
   };
 
   it("warns next to the chip when the agent's daemon cannot apply the project description", () => {

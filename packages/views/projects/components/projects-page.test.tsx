@@ -12,8 +12,11 @@ const mocks = vi.hoisted(() => ({
   members: [] as Array<{ user_id: string; name: string; role: string }>,
   agents: [] as Array<{ id: string; name: string; archived_at: string | null }>,
   pins: [] as Array<{ item_type: string; item_id: string }>,
+  listModes: [] as string[],
   updateProject: vi.fn(),
   deleteProject: vi.fn(),
+  archiveProject: vi.fn(),
+  restoreProject: vi.fn(),
   createPin: vi.fn(),
   deletePin: vi.fn(),
   openModal: vi.fn(),
@@ -53,9 +56,14 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@multica/core/projects", () => ({
-  projectListOptions: () => ({ queryKey: ["projects"] }),
+  projectListOptions: (_workspaceId: string, mode = "active") => {
+    mocks.listModes.push(mode);
+    return { queryKey: ["projects", mode] };
+  },
   useUpdateProject: () => ({ mutate: mocks.updateProject }),
   useDeleteProject: () => ({ mutate: mocks.deleteProject }),
+  useArchiveProject: () => ({ mutate: mocks.archiveProject }),
+  useRestoreProject: () => ({ mutate: mocks.restoreProject }),
   useProjectViewStore: (selector: (state: unknown) => unknown) =>
     selector(mocks.projectViewState),
 }));
@@ -199,6 +207,8 @@ const PROJECT: Project = {
   issue_count: 3,
   done_count: 1,
   resource_count: 0,
+  archived_at: null,
+  archived_by: null,
 };
 
 function makeAdapter(
@@ -237,8 +247,11 @@ beforeEach(() => {
   ];
   mocks.agents = [];
   mocks.pins = [];
+  mocks.listModes = [];
   mocks.updateProject.mockClear();
   mocks.deleteProject.mockClear();
+  mocks.archiveProject.mockClear();
+  mocks.restoreProject.mockClear();
   mocks.createPin.mockClear();
   mocks.deletePin.mockClear();
   mocks.openModal.mockClear();
@@ -247,6 +260,67 @@ beforeEach(() => {
   mocks.projectViewState.sortDirection = "asc";
   mocks.projectViewState.hiddenColumns = [];
   mocks.projectViewState.filters = { statuses: [], priorities: [], leads: [] };
+});
+
+describe("ProjectsPage archive modes", () => {
+  it("loads active projects by default and archived projects on demand", async () => {
+    const user = userEvent.setup();
+    renderProjects();
+
+    expect(mocks.listModes).toContain("active");
+
+    await user.click(screen.getByRole("button", { name: "Archived" }));
+
+    expect(mocks.listModes).toContain("only");
+  });
+
+  it("archives an active project only after confirmation", async () => {
+    const user = userEvent.setup();
+    renderProjects();
+
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+
+    expect(mocks.archiveProject).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "Issues, resources, comments, chat, and run history will remain available.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Archive" }));
+
+    expect(mocks.archiveProject).toHaveBeenCalledWith(PROJECT.id);
+  });
+
+  it("restores an archived project without a destructive confirmation", async () => {
+    const user = userEvent.setup();
+    mocks.projects = [
+      {
+        ...PROJECT,
+        archived_at: "2026-08-10T00:00:00Z",
+        archived_by: "user-1",
+      },
+    ];
+    renderProjects();
+
+    await user.click(screen.getByRole("button", { name: "Restore" }));
+
+    expect(mocks.restoreProject).toHaveBeenCalledWith(PROJECT.id);
+  });
+
+  it("does not offer archive actions to regular members", () => {
+    mocks.members = [
+      { user_id: "user-1", name: "User One", role: "member" },
+    ];
+    renderProjects();
+
+    expect(
+      screen.queryByRole("button", { name: "Archive" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Restore" }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("ProjectsPage compact row navigation", () => {
