@@ -297,7 +297,7 @@ func (h *Handler) GetFigmaPluginContext(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	projects, err := h.Queries.ListProjects(r.Context(), db.ListProjectsParams{WorkspaceID: pluginToken.WorkspaceID})
+	projects, err := h.Queries.ListProjects(r.Context(), db.ListProjectsParams{WorkspaceID: pluginToken.WorkspaceID, ArchivedMode: "active"})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load projects")
 		return

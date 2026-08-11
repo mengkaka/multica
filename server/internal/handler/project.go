@@ -34,6 +34,8 @@ type ProjectResponse struct {
 	// timezone — same contract as issue.start_date / issue.due_date.
 	StartDate  *string `json:"start_date"`
 	DueDate    *string `json:"due_date"`
+	ArchivedAt *string `json:"archived_at"`
+	ArchivedBy *string `json:"archived_by"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
 	IssueCount int64   `json:"issue_count"`
@@ -58,6 +60,8 @@ func projectToResponse(p db.Project) ProjectResponse {
 		LeadID:      uuidToPtr(p.LeadID),
 		StartDate:   dateToPtr(p.StartDate),
 		DueDate:     dateToPtr(p.DueDate),
+		ArchivedAt:  timestampToPtr(p.ArchivedAt),
+		ArchivedBy:  uuidToPtr(p.ArchivedBy),
 		CreatedAt:   timestampToString(p.CreatedAt),
 		UpdatedAt:   timestampToString(p.UpdatedAt),
 	}
@@ -128,10 +132,19 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	if p := r.URL.Query().Get("priority"); p != "" {
 		priorityFilter = pgtype.Text{String: p, Valid: true}
 	}
+	archivedMode := r.URL.Query().Get("archived")
+	if archivedMode == "" {
+		archivedMode = "active"
+	}
+	if archivedMode != "active" && archivedMode != "only" && archivedMode != "all" {
+		writeError(w, http.StatusBadRequest, "invalid archived mode; valid values: active, only, all")
+		return
+	}
 	projects, err := h.Queries.ListProjects(r.Context(), db.ListProjectsParams{
-		WorkspaceID: wsUUID,
-		Status:      statusFilter,
-		Priority:    priorityFilter,
+		WorkspaceID:  wsUUID,
+		Status:       statusFilter,
+		Priority:     priorityFilter,
+		ArchivedMode: archivedMode,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list projects")
@@ -637,6 +650,54 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) ArchiveProject(w http.ResponseWriter, r *http.Request) {
+	h.setProjectArchiveState(w, r, true)
+}
+
+func (h *Handler) RestoreProject(w http.ResponseWriter, r *http.Request) {
+	h.setProjectArchiveState(w, r, false)
+}
+
+func (h *Handler) setProjectArchiveState(w http.ResponseWriter, r *http.Request, archive bool) {
+	idUUID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "project id")
+	if !ok {
+		return
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace id")
+	if !ok {
+		return
+	}
+	project, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{ID: idUUID, WorkspaceID: wsUUID})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	requester, ok := h.requireWorkspaceRole(w, r, uuidToString(project.WorkspaceID), "project not found", "owner", "admin")
+	if !ok {
+		return
+	}
+
+	if archive {
+		project, err = h.Queries.ArchiveProject(r.Context(), db.ArchiveProjectParams{
+			ID: project.ID, WorkspaceID: project.WorkspaceID, ArchivedBy: requester.UserID,
+		})
+	} else {
+		project, err = h.Queries.RestoreProject(r.Context(), db.RestoreProjectParams{
+			ID: project.ID, WorkspaceID: project.WorkspaceID,
+		})
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update project archive state")
+		return
+	}
+
+	resp := projectToResponse(project)
+	resp.IssueCount, resp.DoneCount = h.loadProjectIssueStats(r.Context(), project.ID)
+	resp.ResourceCount = h.loadProjectResourceCount(r.Context(), project.ID)
+	h.publish(protocol.EventProjectUpdated, uuidToString(project.WorkspaceID), "member", uuidToString(requester.UserID), map[string]any{"project": resp})
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // SearchProjectResponse extends ProjectResponse with search metadata.
 type SearchProjectResponse struct {
 	ProjectResponse
@@ -771,7 +832,7 @@ func buildProjectSearchQuery(phrase string, terms []string, includeClosed bool) 
 		COUNT(*) OVER() AS total_count,
 		%s AS match_source
 	FROM project p
-	WHERE p.workspace_id = %s AND %s
+	WHERE p.workspace_id = %s AND p.archived_at IS NULL AND %s
 	ORDER BY %s, %s, p.updated_at DESC
 	LIMIT %s OFFSET %s`,
 		matchSourceExpr,
