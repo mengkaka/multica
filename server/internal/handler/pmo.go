@@ -22,19 +22,21 @@ const (
 )
 
 type PMOConfigResponse struct {
-	ID                 string  `json:"id"`
-	WorkspaceID        string  `json:"workspace_id"`
-	Name               string  `json:"name"`
-	AgentID            string  `json:"agent_id"`
-	RootExternalKey    string  `json:"root_external_key"`
-	WorkloadPropertyID *string `json:"workload_property_id"`
-	ScheduleEnabled    bool    `json:"schedule_enabled"`
-	NextRunAt          *string `json:"next_run_at"`
-	LastRunAt          *string `json:"last_run_at"`
-	LastAppliedAt      *string `json:"last_applied_at"`
-	CreatedBy          string  `json:"created_by"`
-	CreatedAt          string  `json:"created_at"`
-	UpdatedAt          string  `json:"updated_at"`
+	ID                   string  `json:"id"`
+	WorkspaceID          string  `json:"workspace_id"`
+	Name                 string  `json:"name"`
+	AgentID              string  `json:"agent_id"`
+	RootExternalKey      string  `json:"root_external_key"`
+	WorkloadPropertyID   *string `json:"workload_property_id"`
+	OrchestrationSquadID *string `json:"orchestration_squad_id"`
+	OrchestrationIssueID *string `json:"orchestration_issue_id"`
+	ScheduleEnabled      bool    `json:"schedule_enabled"`
+	NextRunAt            *string `json:"next_run_at"`
+	LastRunAt            *string `json:"last_run_at"`
+	LastAppliedAt        *string `json:"last_applied_at"`
+	CreatedBy            string  `json:"created_by"`
+	CreatedAt            string  `json:"created_at"`
+	UpdatedAt            string  `json:"updated_at"`
 }
 
 type PMORunResponse struct {
@@ -57,33 +59,37 @@ type PMORunResponse struct {
 }
 
 type createPMOConfigRequest struct {
-	Name            string `json:"name"`
-	AgentID         string `json:"agent_id"`
-	RootExternalKey string `json:"root_external_key"`
+	Name                 string  `json:"name"`
+	AgentID              string  `json:"agent_id"`
+	RootExternalKey      string  `json:"root_external_key"`
+	OrchestrationSquadID *string `json:"orchestration_squad_id"`
 }
 
 type updatePMOConfigRequest struct {
-	Name            string `json:"name"`
-	AgentID         string `json:"agent_id"`
-	RootExternalKey string `json:"root_external_key"`
-	ScheduleEnabled bool   `json:"schedule_enabled"`
+	Name                 string  `json:"name"`
+	AgentID              string  `json:"agent_id"`
+	RootExternalKey      string  `json:"root_external_key"`
+	ScheduleEnabled      bool    `json:"schedule_enabled"`
+	OrchestrationSquadID *string `json:"orchestration_squad_id"`
 }
 
 func pmoConfigToResponse(config db.PmoSyncConfig) PMOConfigResponse {
 	return PMOConfigResponse{
-		ID:                 uuidToString(config.ID),
-		WorkspaceID:        uuidToString(config.WorkspaceID),
-		Name:               config.Name,
-		AgentID:            uuidToString(config.AgentID),
-		RootExternalKey:    config.RootExternalKey,
-		WorkloadPropertyID: uuidToPtr(config.WorkloadPropertyID),
-		ScheduleEnabled:    config.ScheduleEnabled,
-		NextRunAt:          timestampToPtr(config.NextRunAt),
-		LastRunAt:          timestampToPtr(config.LastRunAt),
-		LastAppliedAt:      timestampToPtr(config.LastAppliedAt),
-		CreatedBy:          uuidToString(config.CreatedBy),
-		CreatedAt:          timestampToString(config.CreatedAt),
-		UpdatedAt:          timestampToString(config.UpdatedAt),
+		ID:                   uuidToString(config.ID),
+		WorkspaceID:          uuidToString(config.WorkspaceID),
+		Name:                 config.Name,
+		AgentID:              uuidToString(config.AgentID),
+		RootExternalKey:      config.RootExternalKey,
+		WorkloadPropertyID:   uuidToPtr(config.WorkloadPropertyID),
+		OrchestrationSquadID: uuidToPtr(config.OrchestrationSquadID),
+		OrchestrationIssueID: uuidToPtr(config.OrchestrationIssueID),
+		ScheduleEnabled:      config.ScheduleEnabled,
+		NextRunAt:            timestampToPtr(config.NextRunAt),
+		LastRunAt:            timestampToPtr(config.LastRunAt),
+		LastAppliedAt:        timestampToPtr(config.LastAppliedAt),
+		CreatedBy:            uuidToString(config.CreatedBy),
+		CreatedAt:            timestampToString(config.CreatedAt),
+		UpdatedAt:            timestampToString(config.UpdatedAt),
 	}
 }
 
@@ -150,11 +156,23 @@ func (h *Handler) CreatePMOConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var orchestrationSquadID pgtype.UUID
+	if request.OrchestrationSquadID != nil {
+		orchestrationSquadID, ok = parseUUIDOrBadRequest(w, *request.OrchestrationSquadID, "orchestration squad id")
+		if !ok {
+			return
+		}
+	}
 	config, err := h.PMOService.CreateConfig(r.Context(), service.CreatePMOConfigParams{
 		WorkspaceID: workspaceUUID, Name: request.Name, AgentID: agentID,
 		RootExternalKey: request.RootExternalKey, CreatedBy: member.UserID,
+		OrchestrationSquadID: orchestrationSquadID,
 	})
 	if err != nil {
+		if errors.Is(err, service.ErrPMOOrchestrationSquad) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if isUniqueViolation(err) {
 			writeError(w, http.StatusConflict, "a PMO configuration already exists for this external key")
 			return
@@ -194,13 +212,21 @@ func (h *Handler) UpdatePMOConfig(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requirePMOInvokableAgent(w, r, workspaceID, uuidToString(member.UserID), agentID); !ok {
 		return
 	}
+	var orchestrationSquadID pgtype.UUID
+	if request.OrchestrationSquadID != nil {
+		orchestrationSquadID, ok = parseUUIDOrBadRequest(w, *request.OrchestrationSquadID, "orchestration squad id")
+		if !ok {
+			return
+		}
+	}
 	config, err := h.PMOService.UpdateConfig(r.Context(), service.UpdatePMOConfigParams{
 		ID: configID, WorkspaceID: workspaceUUID, Name: request.Name, AgentID: agentID,
 		RootExternalKey: request.RootExternalKey, ScheduleEnabled: request.ScheduleEnabled,
+		OrchestrationSquadID: orchestrationSquadID,
 	})
 	if err != nil {
 		switch {
-		case errors.Is(err, service.ErrPMOScheduleNeedsApply), errors.Is(err, service.ErrPMORootKeyLocked):
+		case errors.Is(err, service.ErrPMOScheduleNeedsApply), errors.Is(err, service.ErrPMORootKeyLocked), errors.Is(err, service.ErrPMOOrchestrationSquad):
 			writeError(w, http.StatusBadRequest, err.Error())
 		case isUniqueViolation(err):
 			writeError(w, http.StatusConflict, "a PMO configuration already exists for this external key")

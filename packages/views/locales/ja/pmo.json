@@ -18,6 +18,8 @@
     "agent_label": "エージェント",
     "agent_placeholder": "エージェントを選択...",
     "no_agent": "エージェントなし",
+    "squad_label": "実行 Squad",
+    "no_squad": "実行 Squad なし",
     "root_key_label": "外部ルート要件 key",
     "root_key_placeholder": "例：EXT-P-001",
     "save": "保存",

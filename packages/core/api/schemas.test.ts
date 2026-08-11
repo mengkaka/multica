@@ -1555,6 +1555,21 @@ describe("PMO schemas", () => {
       id: "cfg-1",
       root_external_key: "EXT-P-001",
       schedule_enabled: false,
+      orchestration_squad_id: null,
+      orchestration_issue_id: null,
+    });
+  });
+
+  it("parses PMO orchestration links", () => {
+    expect(
+      parsePMOConfig({
+        ...baseConfig,
+        orchestration_squad_id: "squad-1",
+        orchestration_issue_id: "issue-1",
+      }),
+    ).toMatchObject({
+      orchestration_squad_id: "squad-1",
+      orchestration_issue_id: "issue-1",
     });
   });
 

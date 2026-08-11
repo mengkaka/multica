@@ -96,6 +96,97 @@ func TestUpdatePMOConfigRejectsRootExternalKeyChangeAfterFirstApply(t *testing.T
 	}
 }
 
+func TestCreatePMOConfigAcceptsNullOrchestrationSquad(t *testing.T) {
+	config := createPMOConfigForTest(t)
+	if config.OrchestrationSquadID != nil || config.OrchestrationIssueID != nil {
+		t.Fatalf("unexpected orchestration links: squad=%v issue=%v", config.OrchestrationSquadID, config.OrchestrationIssueID)
+	}
+}
+
+func TestCreatePMOConfigAcceptsValidOrchestrationSquad(t *testing.T) {
+	squadID := insertSquad(t, context.Background(), testWorkspaceID, handlerTestAgentID(t), "PMO execution squad")
+	rootKey := fmt.Sprintf("EXT-P-SQUAD-%d", time.Now().UnixNano())
+	req := newRequest(http.MethodPost, "/api/pmo/configs", map[string]any{
+		"name": "Squad import", "agent_id": handlerTestAgentID(t),
+		"root_external_key": rootKey, "orchestration_squad_id": squadID,
+	})
+	w := httptest.NewRecorder()
+	testHandler.CreatePMOConfig(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	var config PMOConfigResponse
+	if err := json.NewDecoder(w.Body).Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	if config.OrchestrationSquadID == nil || *config.OrchestrationSquadID != squadID {
+		t.Fatalf("orchestration_squad_id = %v, want %s", config.OrchestrationSquadID, squadID)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM pmo_sync_config WHERE id = $1`, config.ID) })
+}
+
+func TestCreatePMOConfigRejectsCrossWorkspaceOrchestrationSquad(t *testing.T) {
+	ctx := context.Background()
+	otherWorkspaceID := createOtherTestWorkspace(t)
+	leaderID := insertAgent(t, ctx, otherWorkspaceID, testRuntimeID, testUserID, "Foreign PMO leader")
+	squadID := insertSquad(t, ctx, otherWorkspaceID, leaderID, "Foreign PMO squad")
+	req := newRequest(http.MethodPost, "/api/pmo/configs", map[string]any{
+		"name": "Foreign squad import", "agent_id": handlerTestAgentID(t),
+		"root_external_key":      fmt.Sprintf("EXT-P-FOREIGN-%d", time.Now().UnixNano()),
+		"orchestration_squad_id": squadID,
+	})
+	w := httptest.NewRecorder()
+	testHandler.CreatePMOConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreatePMOConfigRejectsArchivedOrchestrationLeader(t *testing.T) {
+	ctx := context.Background()
+	leaderID := insertAgent(t, ctx, testWorkspaceID, testRuntimeID, testUserID, "Archived PMO leader")
+	squadID := insertSquad(t, ctx, testWorkspaceID, leaderID, "Archived-leader PMO squad")
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET archived_at = now() WHERE id = $1`, leaderID); err != nil {
+		t.Fatal(err)
+	}
+	req := newRequest(http.MethodPost, "/api/pmo/configs", map[string]any{
+		"name": "Archived leader import", "agent_id": handlerTestAgentID(t),
+		"root_external_key":      fmt.Sprintf("EXT-P-ARCHIVED-%d", time.Now().UnixNano()),
+		"orchestration_squad_id": squadID,
+	})
+	w := httptest.NewRecorder()
+	testHandler.CreatePMOConfig(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdatePMOConfigPreservesOrchestrationIssue(t *testing.T) {
+	config := createPMOConfigForTest(t)
+	issueID := createTestIssue(t, "PMO orchestration root", "todo", "none")
+	t.Cleanup(func() { deleteTestIssue(t, issueID) })
+	if _, err := testPool.Exec(context.Background(), `UPDATE pmo_sync_config SET orchestration_issue_id = $1 WHERE id = $2`, issueID, config.ID); err != nil {
+		t.Fatal(err)
+	}
+	req := withURLParam(newRequest(http.MethodPut, "/api/pmo/configs/"+config.ID, map[string]any{
+		"name": config.Name + " updated", "agent_id": config.AgentID,
+		"root_external_key": config.RootExternalKey, "schedule_enabled": false,
+		"orchestration_squad_id": nil,
+	}), "id", config.ID)
+	w := httptest.NewRecorder()
+	testHandler.UpdatePMOConfig(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	var got string
+	if err := testPool.QueryRow(context.Background(), `SELECT orchestration_issue_id FROM pmo_sync_config WHERE id = $1`, config.ID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != issueID {
+		t.Fatalf("orchestration_issue_id = %s, want %s", got, issueID)
+	}
+}
+
 func TestStartPMORunStampsRuntimeMCPOverlay(t *testing.T) {
 	config := createPMOConfigForTest(t)
 	withComposioMCPAppsFlag(t, testHandler, true)

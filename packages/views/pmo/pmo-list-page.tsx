@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { pmoConfigsOptions } from "@multica/core/pmo/queries";
 import { useCreatePMOConfig } from "@multica/core/pmo/mutations";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { agentListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { PMOConfig } from "@multica/core/types";
@@ -57,6 +57,7 @@ export function PMOListPage() {
   const configs: PMOConfig[] = configsQuery.data ?? [];
 
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: squads = [] } = useQuery(squadListOptions(wsId));
   const agentsById = useMemo(() => {
     const m = new Map<string, { name: string }>();
     for (const a of agents) m.set(a.id, { name: a.name });
@@ -68,11 +69,13 @@ export function PMOListPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [formName, setFormName] = useState("");
   const [formAgentId, setFormAgentId] = useState("");
+  const [formSquadId, setFormSquadId] = useState("");
   const [formRootKey, setFormRootKey] = useState("");
 
   const openCreateDialog = () => {
     setFormName("");
     setFormAgentId("");
+    setFormSquadId("");
     setFormRootKey("");
     setDialogOpen(true);
   };
@@ -82,7 +85,12 @@ export function PMOListPage() {
     const rootKey = formRootKey.trim();
     if (!name || !formAgentId || !rootKey) return;
     createConfig.mutate(
-      { name, agent_id: formAgentId, root_external_key: rootKey },
+      {
+        name,
+        agent_id: formAgentId,
+        orchestration_squad_id: formSquadId || null,
+        root_external_key: rootKey,
+      },
       {
         onSuccess: () => {
           setDialogOpen(false);
@@ -94,6 +102,7 @@ export function PMOListPage() {
   };
 
   const activeAgents = useMemo(() => agents.filter((a) => !a.archived_at), [agents]);
+  const activeSquads = useMemo(() => squads.filter((squad) => !squad.archived_at), [squads]);
 
   const createConfigDialog = (
     <Dialog open={dialogOpen} onOpenChange={(open) => setDialogOpen(open)}>
@@ -130,6 +139,26 @@ export function PMOListPage() {
               {activeAgents.map((agent) => (
                 <NativeSelectOption key={agent.id} value={agent.id} disabled={!isAgentRuntimeBound(agent)}>
                   {agent.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+          <div className="space-y-1">
+            <label className="text-caption text-muted-foreground" htmlFor="pmo-config-squad">
+              {t(($) => $.config.squad_label)}
+            </label>
+            <NativeSelect
+              id="pmo-config-squad"
+              className="w-full"
+              value={formSquadId}
+              onChange={(e) => setFormSquadId(e.target.value)}
+            >
+              <NativeSelectOption value="">
+                {t(($) => $.config.no_squad)}
+              </NativeSelectOption>
+              {activeSquads.map((squad) => (
+                <NativeSelectOption key={squad.id} value={squad.id}>
+                  {squad.name}
                 </NativeSelectOption>
               ))}
             </NativeSelect>

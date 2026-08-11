@@ -24,6 +24,8 @@ const CONFIG: PMOConfig = {
   workspace_id: "ws-1",
   name: "Platform requirements",
   agent_id: "agent-1",
+  orchestration_squad_id: null,
+  orchestration_issue_id: null,
   root_external_key: "EXT-P-001",
   workload_property_id: null,
   schedule_enabled: false,
@@ -71,6 +73,7 @@ vi.mock("@multica/core/pmo/queries", () => ({
 vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"] }),
   agentListOptions: () => ({ queryKey: ["agents"] }),
+  squadListOptions: () => ({ queryKey: ["squads"] }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -97,6 +100,7 @@ vi.mock("@tanstack/react-query", () => ({
     if (key === "pmo" && second === "configs") return queryState.configs;
     if (key === "members") return { data: [{ id: "member-1", name: "Example Member", user_id: "user-1" }] };
     if (key === "agents") return { data: [{ id: "agent-1", name: "Example Agent", archived_at: null, runtime_bound: true }] };
+    if (key === "squads") return { data: [{ id: "squad-1", name: "Example Squad", archived_at: null }] };
     return { data: [] };
   },
 }));
@@ -270,6 +274,7 @@ describe("PMOListPage create-config dialog", () => {
 
     const nameInput = screen.getByLabelText("Name") as HTMLInputElement;
     const agentSelect = screen.getByLabelText("Agent") as HTMLSelectElement;
+    const squadSelect = screen.getByLabelText("Execution squad") as HTMLSelectElement;
     const rootKeyInput = screen.getByLabelText("External root key") as HTMLInputElement;
 
     // Save stays disabled until every required field is filled.
@@ -277,12 +282,18 @@ describe("PMOListPage create-config dialog", () => {
 
     fireEvent.change(nameInput, { target: { value: "My config" } });
     fireEvent.change(agentSelect, { target: { value: "agent-1" } });
+    fireEvent.change(squadSelect, { target: { value: "squad-1" } });
     fireEvent.change(rootKeyInput, { target: { value: "EXT-9" } });
 
     expect(screen.getByRole("button", { name: "Save" })).not.toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(createConfigMutate).toHaveBeenCalledWith(
-      { name: "My config", agent_id: "agent-1", root_external_key: "EXT-9" },
+      {
+        name: "My config",
+        agent_id: "agent-1",
+        orchestration_squad_id: "squad-1",
+        root_external_key: "EXT-9",
+      },
       expect.anything(),
     );
   });

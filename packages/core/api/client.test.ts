@@ -2173,11 +2173,12 @@ describe("ApiClient PMO endpoints", () => {
       name: "Example import",
       agent_id: "agent-1",
       root_external_key: "EXT-P-001",
+      orchestration_squad_id: null,
     });
     expect(requestOf(fetchMock)).toMatchObject({
       url: "https://api.example.test/api/pmo/configs",
       method: "POST",
-      body: { name: "Example import", agent_id: "agent-1", root_external_key: "EXT-P-001" },
+      body: { name: "Example import", agent_id: "agent-1", root_external_key: "EXT-P-001", orchestration_squad_id: null },
     });
   });
 
@@ -2189,6 +2190,7 @@ describe("ApiClient PMO endpoints", () => {
       agent_id: "agent-1",
       root_external_key: "EXT-P-001",
       schedule_enabled: true,
+      orchestration_squad_id: null,
     });
     expect(requestOf(fetchMock)).toMatchObject({
       url: "https://api.example.test/api/pmo/configs/cfg-1",

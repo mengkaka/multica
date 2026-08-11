@@ -25,6 +25,8 @@ const CONFIG: PMOConfig = {
   workspace_id: "ws-1",
   name: "Platform requirements",
   agent_id: "agent-1",
+  orchestration_squad_id: null,
+  orchestration_issue_id: null,
   root_external_key: "EXT-P-001",
   workload_property_id: null,
   schedule_enabled: false,
@@ -145,6 +147,7 @@ vi.mock("@multica/core/pmo/queries", () => ({
 vi.mock("@multica/core/workspace/queries", () => ({
   memberListOptions: () => ({ queryKey: ["members"] }),
   agentListOptions: () => ({ queryKey: ["agents"] }),
+  squadListOptions: () => ({ queryKey: ["squads"] }),
 }));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -173,6 +176,7 @@ vi.mock("@tanstack/react-query", () => ({
     if (key === "pmo" && second === "runs") return { ...queryState.runs, data: options.queryKey?.[2] ? queryState.runs.data : undefined };
     if (key === "members") return { data: [{ id: "member-1", name: "Example Member", user_id: "user-1" }] };
     if (key === "agents") return { data: [{ id: "agent-1", name: "Example Agent", archived_at: null, runtime_bound: true }] };
+    if (key === "squads") return { data: [{ id: "squad-1", name: "Example Squad", archived_at: null }] };
     return { data: [] };
   },
 }));
@@ -538,6 +542,19 @@ describe("PMOConfigDetailPage header controls", () => {
     fireEvent.blur(rootKeyInput);
     expect(updateConfigMutate).toHaveBeenCalledWith(
       expect.objectContaining({ root_external_key: "EXT-P-002" }),
+      expect.anything(),
+    );
+  });
+
+  it("updates the execution squad", () => {
+    previewConfig();
+    setRuns([]);
+    renderPage();
+    fireEvent.change(screen.getByLabelText("Execution squad"), {
+      target: { value: "squad-1" },
+    });
+    expect(updateConfigMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ orchestration_squad_id: "squad-1" }),
       expect.anything(),
     );
   });

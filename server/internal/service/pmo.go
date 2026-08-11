@@ -20,6 +20,7 @@ var (
 	ErrPMOActiveRun          = errors.New("pmo sync already has an active run")
 	ErrPMOScheduleNeedsApply = errors.New("pmo schedule requires a successfully applied run")
 	ErrPMOAgentUnavailable   = errors.New("pmo agent is unavailable")
+	ErrPMOOrchestrationSquad = errors.New("pmo orchestration squad must be active with an active agent leader in the same workspace")
 	ErrPMORootKeyLocked      = errors.New("pmo external root key cannot change after the first applied run; existing links belong to that root")
 )
 
@@ -91,20 +92,22 @@ func (s *PMOService) SetApplyTestHook(hook func(ctx context.Context, qtx *db.Que
 }
 
 type CreatePMOConfigParams struct {
-	WorkspaceID     pgtype.UUID
-	Name            string
-	AgentID         pgtype.UUID
-	RootExternalKey string
-	CreatedBy       pgtype.UUID
+	WorkspaceID          pgtype.UUID
+	Name                 string
+	AgentID              pgtype.UUID
+	RootExternalKey      string
+	CreatedBy            pgtype.UUID
+	OrchestrationSquadID pgtype.UUID
 }
 
 type UpdatePMOConfigParams struct {
-	ID              pgtype.UUID
-	WorkspaceID     pgtype.UUID
-	Name            string
-	AgentID         pgtype.UUID
-	RootExternalKey string
-	ScheduleEnabled bool
+	ID                   pgtype.UUID
+	WorkspaceID          pgtype.UUID
+	Name                 string
+	AgentID              pgtype.UUID
+	RootExternalKey      string
+	ScheduleEnabled      bool
+	OrchestrationSquadID pgtype.UUID
 }
 
 func NewPMOService(queries *db.Queries, txStarter TxStarter, taskSvc *TaskService) *PMOService {
@@ -112,12 +115,16 @@ func NewPMOService(queries *db.Queries, txStarter TxStarter, taskSvc *TaskServic
 }
 
 func (s *PMOService) CreateConfig(ctx context.Context, params CreatePMOConfigParams) (db.PmoSyncConfig, error) {
+	if err := s.validateOrchestrationSquad(ctx, params.WorkspaceID, params.OrchestrationSquadID); err != nil {
+		return db.PmoSyncConfig{}, err
+	}
 	return s.Queries.CreatePMOSyncConfig(ctx, db.CreatePMOSyncConfigParams{
-		WorkspaceID:     params.WorkspaceID,
-		Name:            strings.TrimSpace(params.Name),
-		AgentID:         params.AgentID,
-		RootExternalKey: strings.TrimSpace(params.RootExternalKey),
-		CreatedBy:       params.CreatedBy,
+		WorkspaceID:          params.WorkspaceID,
+		Name:                 strings.TrimSpace(params.Name),
+		AgentID:              params.AgentID,
+		RootExternalKey:      strings.TrimSpace(params.RootExternalKey),
+		CreatedBy:            params.CreatedBy,
+		OrchestrationSquadID: params.OrchestrationSquadID,
 	})
 }
 
@@ -135,14 +142,43 @@ func (s *PMOService) UpdateConfig(ctx context.Context, params UpdatePMOConfigPar
 	if current.LastAppliedAt.Valid && strings.TrimSpace(params.RootExternalKey) != current.RootExternalKey {
 		return db.PmoSyncConfig{}, ErrPMORootKeyLocked
 	}
+	if err := s.validateOrchestrationSquad(ctx, params.WorkspaceID, params.OrchestrationSquadID); err != nil {
+		return db.PmoSyncConfig{}, err
+	}
 	return s.Queries.UpdatePMOSyncConfig(ctx, db.UpdatePMOSyncConfigParams{
-		ID:              params.ID,
-		WorkspaceID:     params.WorkspaceID,
-		Name:            strings.TrimSpace(params.Name),
-		AgentID:         params.AgentID,
-		RootExternalKey: strings.TrimSpace(params.RootExternalKey),
-		ScheduleEnabled: params.ScheduleEnabled,
+		ID:                   params.ID,
+		WorkspaceID:          params.WorkspaceID,
+		Name:                 strings.TrimSpace(params.Name),
+		AgentID:              params.AgentID,
+		RootExternalKey:      strings.TrimSpace(params.RootExternalKey),
+		ScheduleEnabled:      params.ScheduleEnabled,
+		OrchestrationSquadID: params.OrchestrationSquadID,
 	})
+}
+
+func (s *PMOService) validateOrchestrationSquad(ctx context.Context, workspaceID, squadID pgtype.UUID) error {
+	if !squadID.Valid {
+		return nil
+	}
+	squad, err := s.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
+		ID: squadID, WorkspaceID: workspaceID,
+	})
+	if err != nil || squad.ArchivedAt.Valid {
+		return ErrPMOOrchestrationSquad
+	}
+	leader, err := s.Queries.GetAgent(ctx, squad.LeaderID)
+	if err != nil || !validPMOOrchestrationSquad(workspaceID, squad, leader) {
+		return ErrPMOOrchestrationSquad
+	}
+	return nil
+}
+
+func validPMOOrchestrationSquad(workspaceID pgtype.UUID, squad db.Squad, leader db.Agent) bool {
+	return !squad.ArchivedAt.Valid &&
+		!leader.ArchivedAt.Valid &&
+		squad.WorkspaceID == workspaceID &&
+		leader.WorkspaceID == workspaceID &&
+		squad.LeaderID == leader.ID
 }
 
 func (s *PMOService) DeleteConfig(ctx context.Context, workspaceID, configID pgtype.UUID) error {

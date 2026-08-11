@@ -18,6 +18,8 @@
     "agent_label": "智能体",
     "agent_placeholder": "选择智能体...",
     "no_agent": "无智能体",
+    "squad_label": "执行 Squad",
+    "no_squad": "不配置执行 Squad",
     "root_key_label": "外部根需求 key",
     "root_key_placeholder": "例如：EXT-P-001",
     "save": "保存",

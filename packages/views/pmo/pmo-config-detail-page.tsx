@@ -12,7 +12,7 @@ import {
   useUpdatePMOConfig,
 } from "@multica/core/pmo/mutations";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
+import { memberListOptions, agentListOptions, squadListOptions } from "@multica/core/workspace/queries";
 import { isAgentRuntimeBound } from "@multica/core/agents";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type {
@@ -91,6 +91,7 @@ export function PMOConfigDetailPage() {
 
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: squads = [] } = useQuery(squadListOptions(wsId));
 
   const startRun = useStartPMORun();
   const applyRun = useApplyPMORun();
@@ -159,6 +160,7 @@ export function PMOConfigDetailPage() {
         id: config.id,
         name: config.name,
         agent_id: config.agent_id,
+        orchestration_squad_id: config.orchestration_squad_id,
         root_external_key: config.root_external_key,
         schedule_enabled: enabled,
       },
@@ -180,6 +182,7 @@ export function PMOConfigDetailPage() {
         id: config.id,
         name: config.name,
         agent_id: config.agent_id,
+        orchestration_squad_id: config.orchestration_squad_id,
         root_external_key: next,
         schedule_enabled: config.schedule_enabled,
       },
@@ -193,6 +196,7 @@ export function PMOConfigDetailPage() {
   };
 
   const activeAgents = useMemo(() => agents.filter((a) => !a.archived_at), [agents]);
+  const activeSquads = useMemo(() => squads.filter((squad) => !squad.archived_at), [squads]);
 
   const filteredRows = useMemo(() => {
     const rows = diffView?.rows ?? [];
@@ -406,6 +410,7 @@ export function PMOConfigDetailPage() {
                   id: config.id,
                   name: config.name,
                   agent_id: event.target.value,
+                  orchestration_squad_id: config.orchestration_squad_id,
                   root_external_key: config.root_external_key,
                   schedule_enabled: config.schedule_enabled,
                 },
@@ -420,6 +425,34 @@ export function PMOConfigDetailPage() {
             {activeAgents.map((agent) => (
               <NativeSelectOption key={agent.id} value={agent.id} disabled={!isAgentRuntimeBound(agent)}>
                 {agent.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+
+          <NativeSelect
+            className="w-44"
+            value={config.orchestration_squad_id ?? ""}
+            onChange={(event) => {
+              updateConfig.mutate(
+                {
+                  id: config.id,
+                  name: config.name,
+                  agent_id: config.agent_id,
+                  orchestration_squad_id: event.target.value || null,
+                  root_external_key: config.root_external_key,
+                  schedule_enabled: config.schedule_enabled,
+                },
+                { onError: () => toast.error(t(($) => $.config.save_failed)) },
+              );
+            }}
+            aria-label={t(($) => $.config.squad_label)}
+          >
+            <NativeSelectOption value="">
+              {t(($) => $.config.no_squad)}
+            </NativeSelectOption>
+            {activeSquads.map((squad) => (
+              <NativeSelectOption key={squad.id} value={squad.id}>
+                {squad.name}
               </NativeSelectOption>
             ))}
           </NativeSelect>

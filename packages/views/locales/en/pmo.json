@@ -18,6 +18,8 @@
     "agent_label": "Agent",
     "agent_placeholder": "Select agent...",
     "no_agent": "No agent",
+    "squad_label": "Execution squad",
+    "no_squad": "No execution squad",
     "root_key_label": "External root key",
     "root_key_placeholder": "Example: EXT-P-001",
     "save": "Save",

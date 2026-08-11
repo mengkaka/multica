@@ -42,6 +42,8 @@ export interface PMOConfig {
   root_external_key: string;
   /** Numeric issue-property definition backing workload; null until first apply. */
   workload_property_id: string | null;
+  orchestration_squad_id: string | null;
+  orchestration_issue_id: string | null;
   schedule_enabled: boolean;
   next_run_at: string | null;
   last_run_at: string | null;
@@ -103,6 +105,7 @@ export interface CreatePMOConfigRequest {
   name: string;
   agent_id: string;
   root_external_key: string;
+  orchestration_squad_id: string | null;
 }
 
 /** Request body for PUT /api/pmo/configs/:id. */
